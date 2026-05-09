@@ -14,18 +14,18 @@ func before_case(__):
 
 	# Setup mock answers
 	when(first_state.can_enter).then_return(true)
-	when(first_state.enter).then_answer(func(__): pass)
-	when(first_state.exit).then_answer(func(__): pass)
-	when(first_state.tick).then_answer(func(__): pass)
-	when(first_state.display_enter).then_answer(func(__): pass)
-	when(first_state.display_exit).then_answer(func(__): pass)
+	when(first_state._on_enter).then_answer(func(__): pass)
+	when(first_state._on_exit).then_answer(func(__): pass)
+	when(first_state._on_tick).then_answer(func(__): pass)
+	when(first_state._on_display_enter).then_answer(func(__): pass)
+	when(first_state._on_display_exit).then_answer(func(__): pass)
 
 	when(other_state.can_enter).then_return(true)
-	when(other_state.enter).then_answer(func(__): pass)
-	when(other_state.exit).then_answer(func(__): pass)
-	when(other_state.tick).then_answer(func(__): pass)
-	when(other_state.display_enter).then_answer(func(__): pass)
-	when(other_state.display_exit).then_answer(func(__): pass)
+	when(other_state._on_enter).then_answer(func(__): pass)
+	when(other_state._on_exit).then_answer(func(__): pass)
+	when(other_state._on_tick).then_answer(func(__): pass)
+	when(other_state._on_display_enter).then_answer(func(__): pass)
+	when(other_state._on_display_exit).then_answer(func(__): pass)
 
 	# Set state names
 	first_state.name = "First State"
@@ -45,18 +45,18 @@ func test_should_start_empty():
 	expect_empty(state_machine.state)
 
 func test_should_notify_new_state_on_enter():
-	capture_signal(first_state.on_enter, 3)
+	capture_signal(first_state.entering_state, 3)
 
 	# Enter first state
 	state_machine.transition("First State")
 
 	# Check for event
-	expect_not_empty(get_signal_emissions(first_state.on_enter))
+	expect_not_empty(get_signal_emissions(first_state.entering_state))
 	expect_empty(get_calls_of(first_state.can_enter))
-	expect_equal(get_calls_of(first_state.enter), [[null, 0]])
+	expect_equal(get_calls_of(first_state._on_enter), [[null, 0]])
 
 func test_on_enter_should_prevent_transition():
-	other_state.on_enter.connect(
+	other_state.entering_state.connect(
 		func(_new_state, _tick, prevent):
 			prevent.call()
 	)
@@ -69,7 +69,7 @@ func test_on_enter_should_prevent_transition():
 	expect_equal(state_machine.state, "First State")
 
 func test_on_exit_should_prevent_transition():
-	first_state.on_exit.connect(
+	first_state.exiting_state.connect(
 		func(_new_state, _tick, prevent):
 			prevent.call()
 	)
@@ -94,7 +94,7 @@ func test_can_enter_should_prevent_transition():
 	expect_equal(state_machine.state, "First State")
 
 func test_should_call_tick():
-	capture_signal(first_state.on_tick, 3)
+	capture_signal(first_state.state_ticked, 3)
 
 	# Set state
 	state_machine.transition("First State")
@@ -109,27 +109,27 @@ func test_should_call_tick():
 func test_should_notify_display_state():
 	state_machine.state = "First State"
 
-	capture_signal(first_state.on_display_enter, 2)
-	capture_signal(first_state.on_display_exit, 2)
-	capture_signal(other_state.on_display_enter, 2)
+	capture_signal(first_state.display_entered, 2)
+	capture_signal(first_state.display_exited, 2)
+	capture_signal(other_state.display_entered, 2)
 
 	# First loop, display enters First State
 	NetworkMocks.in_network_tick_loop(func():
 		state_machine.transition("First State")
 	)
-	expect_not_empty(get_signal_emissions(first_state.on_display_enter))
-	expect_not_empty(get_calls_of(first_state.display_enter))
+	expect_not_empty(get_signal_emissions(first_state.display_entered))
+	expect_not_empty(get_calls_of(first_state._on_display_enter))
 
 	# Second loop, display enters Other State
 	NetworkMocks.in_network_tick_loop(func():
 		state_machine.transition("Other State")
 	)
 
-	expect_not_empty(get_signal_emissions(first_state.on_display_exit))
-	expect_not_empty(get_signal_emissions(other_state.on_display_enter))
+	expect_not_empty(get_signal_emissions(first_state.display_entered))
+	expect_not_empty(get_signal_emissions(other_state.display_entered))
 
-	expect_not_empty(get_calls_of(first_state.display_exit))
-	expect_not_empty(get_calls_of(other_state.display_enter))
+	expect_not_empty(get_calls_of(first_state._on_display_exit))
+	expect_not_empty(get_calls_of(other_state._on_display_enter))
 
 func after_case(__):
 	state_machine.queue_free()

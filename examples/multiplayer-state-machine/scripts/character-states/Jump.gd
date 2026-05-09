@@ -9,13 +9,13 @@ extends RewindableState
 func can_enter(_previous_state):
 	return input.jump and character.is_on_floor()
 
-func display_enter(_previous, _t):
+func _on_display_enter(_previous, _t):
 	character.color = Color.BLUE
 
-func enter(_previous_state, _tick):
+func _on_enter(_previous_state, _tick):
 	character.velocity.y = jump_strength
 
-func tick(delta, tick, is_fresh):
+func _on_tick(_delta, _tick, _is_fresh):
 	var input_dir = input.movement
 	var direction = (character.transform.basis * Vector3(input_dir.x, 0, input_dir.z)).normalized()
 	if direction:

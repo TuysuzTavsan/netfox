@@ -35,14 +35,14 @@ class_name RewindableStateMachine
 ## [br][br]
 ## [b]State changes are not necessarily emitted on all peers.[/b][br]
 ## See: [url=https://foxssake.github.io/netfox/netfox.extras/guides/rewindable-state-machine/#caveats]RewindableStateMachine caveats[/url]
-signal on_state_changed(old_state: RewindableState, new_state: RewindableState)
+signal state_changed(old_state: RewindableState, new_state: RewindableState)
 
 ## Emitted after the displayed state has changed.
 ##
 ## This signal can be used to update visuals based on state changes.
 ## [br][br]
 ## This signal is emitted whenever the state after a tick loop has changed.
-signal on_display_state_changed(old_state: RewindableState, new_state: RewindableState)
+signal display_state_changed(old_state: RewindableState, new_state: RewindableState)
 
 static var _logger: NetfoxLogger = NetfoxLogger._for_extras("RewindableStateMachine")
 
@@ -59,9 +59,9 @@ var _prevent_callable: Callable = func(): _prevent_transition = true
 ## state's [method RewindableState.can_enter] callback decides if it can be
 ## entered from the current state.
 ## [br][br]
-## Upon transitioning, [method RewindableState.exit] is called on the old state,
-## and [method RewindableState.enter] is called on the new state. In addition,
-## [signal on_state_changed] is emitted.
+## Upon transitioning, [method RewindableState._on_exit] is called on the old state,
+## and [method RewindableState._on_enter] is called on the new state. In addition,
+## [signal state_changed] is emitted.
 ## [br][br]
 ## Does nothing if transitioning to the currently active state. Emits a warning
 ## and does nothing when transitioning to an unknown state.
@@ -84,20 +84,20 @@ func transition(new_state_name: StringName) -> bool:
 			return false
 
 		# Emit exit signal, allow handlers to prevent transition
-		_state_object.on_exit.emit(new_state, NetworkRollback.tick, _prevent_callable)
+		_state_object.exiting_state.emit(new_state, NetworkRollback.tick, _prevent_callable)
 		if _prevent_transition: return false
 
-	new_state.on_enter.emit(from_state, NetworkRollback.tick, _prevent_callable)
+	new_state.entering_state.emit(from_state, NetworkRollback.tick, _prevent_callable)
 	if _prevent_transition: return false
 
 	# Transition valid, run callbacks
 	if is_instance_valid(from_state):
-		from_state.exit(new_state, NetworkRollback.tick)
-	new_state.enter(from_state, NetworkRollback.tick)
+		from_state._on_exit(new_state, NetworkRollback.tick)
+	new_state._on_enter(from_state, NetworkRollback.tick)
 
 	# Set new state
 	_state_object = new_state
-	on_state_changed.emit(from_state, new_state)
+	state_changed.emit(from_state, new_state)
 
 	return true
 
@@ -159,19 +159,19 @@ func _get_configuration_warnings():
 
 func _rollback_tick(delta: float, tick: int, is_fresh: bool) -> void:
 	if _state_object:
-		_state_object.tick(delta, tick, is_fresh)
-		_state_object.on_tick.emit(delta, tick, is_fresh)
+		_state_object._on_tick(delta, tick, is_fresh)
+		_state_object.state_ticked.emit(delta, tick, is_fresh)
 
 func _after_tick_loop():
 	if _state_object != _previous_state_object:
-		on_display_state_changed.emit(_previous_state_object, _state_object)
+		display_state_changed.emit(_previous_state_object, _state_object)
 
 		if _previous_state_object:
-			_previous_state_object.on_display_exit.emit(_state_object, NetworkTime.tick)
-			_previous_state_object.display_exit(_state_object, NetworkTime.tick)
+			_previous_state_object.display_exited.emit(_state_object, NetworkTime.tick)
+			_previous_state_object._on_display_exit(_state_object, NetworkTime.tick)
 
-		_state_object.on_display_enter.emit(_previous_state_object, NetworkTime.tick)
-		_state_object.display_enter(_previous_state_object, NetworkTime.tick)
+		_state_object.display_entered.emit(_previous_state_object, NetworkTime.tick)
+		_state_object._on_display_enter(_previous_state_object, NetworkTime.tick)
 
 		_previous_state_object = _state_object
 

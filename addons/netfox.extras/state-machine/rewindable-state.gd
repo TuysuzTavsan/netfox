@@ -13,19 +13,19 @@ class_name RewindableState
 ## @tutorial(RewindableStateMachine Guide): https://foxssake.github.io/netfox/latest/netfox.extras/guides/rewindable-state-machine/
 
 ## Emitted when entering the state
-signal on_enter(previous_state: RewindableState, tick: int, prevent: Callable)
+signal entering_state(previous_state: RewindableState, tick: int, prevent: Callable)
 
 ## Emitted on every rollback tick while the state is active
-signal on_tick(delta: float, tick: int, is_fresh: bool)
+signal state_ticked(delta: float, tick: int, is_fresh: bool)
 
 ## Emitted when exiting the state
-signal on_exit(next_state: RewindableState, tick: int, prevent: Callable)
+signal exiting_state(next_state: RewindableState, tick: int, prevent: Callable)
 
 ## Emitted before displaying this state
-signal on_display_enter(previous_state: RewindableState, tick: int)
+signal display_entered(previous_state: RewindableState, tick: int)
 
 ## Emitted before displaying another state
-signal on_display_exit(next_state: RewindableState, tick: int)
+signal display_exited(next_state: RewindableState, tick: int)
 
 ## The [RewindableStateMachine] this state belongs to.
 ## [br][br]
@@ -41,7 +41,7 @@ var _state_machine: RewindableStateMachine
 ## tick loop to update game state.
 ## [br][br]
 ## [i]override[/i] to implement game logic
-func tick(delta: float, tick: int, is_fresh: bool) -> void:
+func _on_tick(delta: float, tick: int, is_fresh: bool) -> void:
 	pass
 
 ## Callback for entering the state.
@@ -52,7 +52,7 @@ func tick(delta: float, tick: int, is_fresh: bool) -> void:
 ## configured as state in a [RollbackSynchronizer].
 ## [br][br]
 ## [i]override[/i] to implement game logic reacting to state transitions
-func enter(previous_state: RewindableState, tick: int) -> void:
+func _on_enter(previous_state: RewindableState, tick: int) -> void:
 	pass
 
 ## Callback for exiting the state.
@@ -63,7 +63,29 @@ func enter(previous_state: RewindableState, tick: int) -> void:
 ## configured as state in a [RollbackSynchronizer].
 ## [br][br]
 ## [i]override[/i] to implement game logic reacting to state transitions
-func exit(next_state: RewindableState, tick: int) -> void:
+func _on_exit(next_state: RewindableState, tick: int) -> void:
+	pass
+
+## Callback for displaying the state.
+##
+## After each tick loop, the [RewindableStateMachine] checks the final state,
+## i.e. the state that will be active until the next tick loop. If that state
+## has changed [b]to[/b] this one, the [RewindableStateMachine] will call this
+## method.
+## [br][br]
+## [i]override[/i] to implement visuals / effects reacting to state transitions
+func _on_display_enter(previous_state: RewindableState, tick: int) -> void:
+	pass
+
+## Callback for displaying a different state.
+##
+## After each tick loop, the [RewindableStateMachine] checks the final state,
+## i.e. the state that will be active until the next tick loop. If that state
+## has changed [b]from[/b] this one, the [RewindableStateMachine] will call this
+## method.
+## [br][br]
+## [i]override[/i] to implement visuals / effects reacting to state transitions
+func _on_display_exit(next_state: RewindableState, tick: int) -> void:
 	pass
 
 ## Callback for validating state transitions.
@@ -80,28 +102,6 @@ func can_enter(previous_state: RewindableState) -> bool:
 	# Add your validation logic here
 	# Return true if the state machine can transition to the next state
 	return true
-
-## Callback for displaying the state.
-##
-## After each tick loop, the [RewindableStateMachine] checks the final state,
-## i.e. the state that will be active until the next tick loop. If that state
-## has changed [b]to[/b] this one, the [RewindableStateMachine] will call this
-## method.
-## [br][br]
-## [i]override[/i] to implement visuals / effects reacting to state transitions
-func display_enter(previous_state: RewindableState, tick: int) -> void:
-	pass
-
-## Callback for displaying a different state.
-##
-## After each tick loop, the [RewindableStateMachine] checks the final state,
-## i.e. the state that will be active until the next tick loop. If that state
-## has changed [b]from[/b] this one, the [RewindableStateMachine] will call this
-## method.
-## [br][br]
-## [i]override[/i] to implement visuals / effects reacting to state transitions
-func display_exit(next_state: RewindableState, tick: int) -> void:
-	pass
 
 func _get_configuration_warnings():
 	return [] if get_parent() is RewindableStateMachine else ["This state should be a child of a RewindableStateMachine."]

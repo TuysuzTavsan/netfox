@@ -4,10 +4,10 @@ extends RewindableState
 @export var input: PlayerInputStateMachine
 @export var speed = 5.0
 
-func display_enter(_previous, _t):
+func _on_display_enter(_previous, _t):
 	character.color = Color.RED
 
-func tick(delta, tick, is_fresh):
+func _on_tick(_delta, _tick, _is_fresh):
 	var input_dir = input.movement
 	var direction = (character.transform.basis * Vector3(input_dir.x, 0, input_dir.z)).normalized()
 	if direction:

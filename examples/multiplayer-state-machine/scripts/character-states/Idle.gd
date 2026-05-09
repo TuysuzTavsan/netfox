@@ -3,10 +3,10 @@ extends RewindableState
 @export var character: CharacterBody3D
 @export var input: PlayerInputStateMachine
 
-func display_enter(_previous, _t):
+func _on_display_enter(_previous, _t):
 	character.color = Color.WHITE
 
-func tick(delta, tick, is_fresh):
+func _on_tick(_delta, _tick, _is_fresh):
 	character.velocity *= NetworkTime.physics_factor
 	character.move_and_slide()
 	character.velocity /= NetworkTime.physics_factor

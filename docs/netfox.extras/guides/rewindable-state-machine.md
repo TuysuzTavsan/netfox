@@ -35,24 +35,24 @@ RewindableStateMachine.
 
 States react to the game world using the following callbacks:
 
-`tick(delta, tick, is_fresh)`
+`_on_tick(delta, tick, is_fresh)`
 : Called for every rollback tick the state is active.
 
-`enter(previous_state, tick)`
+`_on_enter(previous_state, tick)`
 : Called when entering the state.
 
-`exit(next_state, tick)`
+`_on_exit(next_state, tick)`
 : Called when exiting the state.
+
+`_on_display_enter(previous_state, tick)`
+: Called before displaying the state.
+
+`_on_display_exit(next_state, tick)`
+: Called before displaying a different state.
 
 `can_enter(previous_state)`
 : Called before entering the state. The state is only entered if this method
   returns true.
-
-`display_enter(previous_state, tick)`
-: Called before displaying the state.
-
-`display_exit(next_state, tick)`
-: Called before displaying a different state.
 
 You can override any of these callbacks to implement your custom behaviors.
 
@@ -64,7 +64,7 @@ extends RewindableState
 
 @export var input: PlayerInputStateMachine
 
-func tick(delta, tick, is_fresh):
+func _on_tick(delta, tick, is_fresh):
     if input.movement != Vector3.ZERO:
         state_machine.transition(&"Move")
     elif input.jump:
@@ -88,11 +88,11 @@ script, among others.
 
 Each of these signals correspond to a callback explained above:
 
-* `on_enter()` → `enter()`
-* `on_tick()` → `tick()`
-* `on_exit()` → `exit()`
-* `on_display_enter()` → `display_enter()`
-* `on_display_exit()` → `display_exit()`
+* `entering_state()` → `_on_enter()`
+* `state_ticked()` → `_on_tick()`
+* `exiting_state()` → `_on_exit()`
+* `display_entered()` → `_on_display_enter()`
+* `display_exited()` → `_on_display_exit()`
 
 ## Adding states
 
@@ -103,14 +103,14 @@ Without the owner set, the *RewindableStateMachine* won't recognize the state.
 
 ## Display State vs State
 
-There's two sets of callbacks for state transition - `enter()`/`exit()` and
-`display_enter()`/`display_exit()`.
+There's two sets of callbacks for state transition - `_on_enter()`/`_on_exit()` and
+`_on_display_enter()`/`_on_display_exit()`.
 
-The `enter()`/`exit()` callbacks are intended for implementing game logic. The
-`display_enter()`/`display_exit()` are intended for implementing presentation
+The `_on_enter()`/`_on_exit()` callbacks are intended for implementing game logic. The
+`_on_display_enter()`/`_on_display_exit()` are intended for implementing presentation
 logic - visuals, animations, sound effects, etc.
 
-The same applies to `on_state_changed` vs. `on_display_state_changed`.
+The same applies to `state_changed` vs. `display_state_changed`.
 
 Let's take an example. The game is currently on tick @8. It needs to re-run
 ticks @0 to @8 during rollback. In these ticks, the player moves a bit,
@@ -146,8 +146,8 @@ This will trigger the following state changes:
 * Tick@5: Jumping → Moving
 * Tick@8: Moving → Idle
 
-For each of the above, the `on_state_changed` signal will be emitted, and the
-`enter()`/`exit()` callbacks will be triggered.
+For each of the above, the `state_changed` signal will be emitted, and the
+`_on_enter()`/`_on_exit()` callbacks will be triggered.
 
 This makes the above callbacks ideal for game logic, e.g. adding an upward
 velocity to the player when they enter the `Jumping` state.
@@ -182,7 +182,7 @@ player's state was `Moving`. After the rollback loop, the player's state is
 jumping sound effect.
 
 This can be done by using the display state callbacks - the
-`on_display_state_changed` signal, and the `display_enter()`/`display_exit()`
+`display_state_changed` signal, and the `_on_display_enter()`/`_on_display_exit()`
 methods.
 
 ## Caveats
@@ -199,13 +199,13 @@ peers use the state broadcast by the host.
 **This means that transition callbacks are not always ran.** This is by design
 and expected ( see [#327] ).
 
-As a best practice, in the `enter()`, `exit()` callbacks and the
-`on_state_changed` signal, only change game state - i.e. properties that are
+As a best practice, in the `_on_enter()`, `_on_exit()` callbacks and the
+`state_changed` signal, only change game state - i.e. properties that are
 configured as state in [RollbackSynchronizer].
 
 To update visuals - e.g. change animation, spawn effects, etc. -, use either
-the `on_display_state_changed` signal, or the `display_enter()` and
-`display_exit()` callbacks to react to state transitions.
+the `display_state_changed` signal, or the `_on_display_enter()` and
+`_on_display_exit()` callbacks to react to state transitions.
 
 [multiplayer-state-machine]: https://github.com/foxssake/netfox/tree/main/examples/multiplayer-state-machine
 [RollbackSynchronizer]: ../../netfox/nodes/rollback-synchronizer.md
