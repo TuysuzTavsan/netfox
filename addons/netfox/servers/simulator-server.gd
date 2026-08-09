@@ -115,43 +115,57 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 	var has_is_alive_method := projectile.has_method("is_alive")
 	
 	if not has_step_method or not has_is_alive_method:
-		_logger.error("Error registering projectile %s : Projectiles must implement step and is_alive methods."
-		% projectile.name)
+		_logger.error(
+			"Error registering projectile %s : Projectiles must implement step and is_alive methods.",
+			[projectile.name]
+		)
 		return
 	
 	var enet_peer := multiplayer.multiplayer_peer as ENetMultiplayerPeer
 	if not enet_peer:
-		_logger.error("Error registering projectile %s : Multiplayer peer is either null or not type of ENet.\n
-		Only ENetMultiplayerPeer is supported for now." % projectile.name)
+		_logger.error(
+			"Error registering projectile %s : Multiplayer peer is either null or not type of ENet.\n" +
+			"Only ENetMultiplayerPeer is supported for now.", [projectile.name]
+		)
 		return
 	
 	var firing_peer := enet_peer.get_peer(firing_peer_id)
 	
 	if not firing_peer:
-		_logger.error("Error registering projectile %s: Firing peer #%s is not found on active peers."
-		%[projectile.name, firing_peer_id])
+		_logger.error(
+			"Error registering projectile %s: Firing peer #%s is not found on active peers.",
+			[projectile.name, firing_peer_id]
+		)
 		return
 	
 	var rtt_ms := firing_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
 	var half_rtt_sec := (rtt_ms * 0.5) / 1000.0
 	var half_rtt_ticks := half_rtt_sec / NetworkTime.ticktime
-
-	var estimated_firing_tick := fired_tick - roundi(half_rtt_ticks)
+	
+	# Dont forget that we synchronize current_tick - _simulation_host_delay_ticks
+	var estimated_firing_tick := fired_tick - roundi(half_rtt_ticks) - _simulation_host_delay_ticks
 	
 	if estimated_firing_tick < 0:
-		_logger.error("Error registering projectile %s: Calculated estimated_firing_tick as negative. Not registering.\n
-		half rtt: %s, fired tick: %s, estimated firing tick: %s"
-		%[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick])
+		_logger.error(
+			"Error registering projectile %s: Calculated estimated_firing_tick as negative. Not registering.\n" +
+			"half rtt: %s, fired tick: %s, estimated firing tick: %s",
+			[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick]
+		)
 		return
 	
 	if estimated_firing_tick < NetworkTime.tick - _simulation_history_size:
-		_logger.error("Error registering projectile %s: Calculated estimated_firing_tick is older than history.\n
-		Returning without registering. half rtt: %s, fired tick: %s, estimated firing tick: %s"
-		%[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick])
+		_logger.error(
+			"Error registering projectile %s: Calculated estimated_firing_tick is older than history.\n" +
+			"Returning without registering. half rtt: %s, fired tick: %s, estimated firing tick: %s",
+			[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick]
+		)
 		return
 	
-	_logger.debug("Registered projectile %s with stats:\n firing_peer: %s, fired tick: %s, half rtt: %s,
-	estimated firing tick: %s" %[projectile.name, firing_peer_id, fired_tick, half_rtt_sec, estimated_firing_tick])
+	_logger.debug(
+		"Registered projectile %s with stats:\n" +
+		"firing_peer: %s, fired tick: %s, half rtt: %s, estimated firing tick: %s",
+		[projectile.name, firing_peer_id, fired_tick, half_rtt_sec, estimated_firing_tick]
+	)
 	
 	var existing_projectile_arr := _fresh_registered_projectiles_by_tick.get(estimated_firing_tick) as Array
 	if existing_projectile_arr:
@@ -160,9 +174,14 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 		_fresh_registered_projectiles_by_tick[estimated_firing_tick] = [projectile]
 
 func _after_tick(tick : int) -> void:
+	
+	_catch_up_fresh_projectiles(tick)
+	
 	_handle_host_simulators()
 	_handle_host_puppet_simulators()
 	_handle_local_authoritative_simulators()
+	
+	_step_living_projectiles(tick)
 	
 	if NetworkTime.tick - _simulation_host_delay_ticks >= 0:
 		# History server only records owned simulator state properties.
@@ -219,8 +238,10 @@ func _handle_local_authoritative_simulators() -> void:
 		simulator.listened_input_sender._save_properties()
 		
 		if latest_truth_tick < 0 or not latest_truth_snapshot:
-			_logger.warning("Couldnt find any truth from host, running simulation for \
-			only current tick.")
+			_logger.warning(
+				"Couldnt find any truth from host.\n" +
+				"Running simulation for only current tick."
+			)
 			
 			# Retrieve the input history and apply manually.
 			var input_history := _history_server._input_sender_history
@@ -298,6 +319,7 @@ func _handle_host_puppet_simulators() -> void:
 # Steps every already-caught-up living projectile by a single tick.
 # No need to restore world state for living projectiles.
 func _step_living_projectiles(current_tick: int) -> void:
+	var simulated_tick := current_tick - _simulation_host_delay_ticks
 	
 	# Iterate in reverse because we are also removing.
 	var i := _living_projectiles.size() - 1
@@ -305,13 +327,106 @@ func _step_living_projectiles(current_tick: int) -> void:
 		var projectile : Node = _living_projectiles[i]
 		
 		if not is_instance_valid(projectile):
+			_logger.warning("While stepping living projectiles: projectile at index %s no longer valid, dropping", [i])
 			_living_projectiles.remove_at(i)
 		else:
-			projectile.step(NetworkTime.ticktime, current_tick)
+			_logger.trace("Stepping living projectile: %s at tick #%s", [projectile.name, simulated_tick])
+			projectile.step(NetworkTime.ticktime, simulated_tick)
+			
 			if not projectile.is_alive():
+				_logger.trace("After stepping living projectile: %s projectile died at tick %s",
+				[projectile.name, simulated_tick]
+				)
+				
 				_living_projectiles.remove_at(i)
 		
 		i -= 1
+
+# Steps the freshly registered projectiles up to current_tick - _simulation_host_delay_ticks (not included).
+func _catch_up_fresh_projectiles(current_tick: int) -> void:
+	if _fresh_registered_projectiles_by_tick.is_empty():
+		return
+	
+	var simulated_tick := current_tick - _simulation_host_delay_ticks
+	var oldest_tick : int = _fresh_registered_projectiles_by_tick.keys().min()
+	
+	# Ensure oldest tick is not older than our history window.
+	oldest_tick = maxi(oldest_tick, current_tick - _simulation_history_size)
+	
+	_logger.trace(
+		"Catching up fresh projectiles: oldest_tick=%s, simulated_tick=%s, pending_ticks=%s",
+		[oldest_tick, simulated_tick, _fresh_registered_projectiles_by_tick.keys()]
+	)
+	
+	# Temp array to hold projectiles.
+	var fresh_projectiles : Array[Node] = []
+	
+	for tick in range(oldest_tick, simulated_tick):
+		_history_server._restore_simulator(tick)
+		
+		# Get projectiles registered at this tick and add it our fresh_projectiles array.
+		var registered_projectiles_arr_at_tick := _fresh_registered_projectiles_by_tick.get(tick) as Array
+		if registered_projectiles_arr_at_tick:
+			_logger.trace(
+				"Tick %s: %s registered projectiles are joining the projectile catch up phase: %s",
+				[tick, registered_projectiles_arr_at_tick.size(),
+				registered_projectiles_arr_at_tick.map(
+					func(p): return _get_projectile_debug_name(p))
+				]
+			)
+			
+			fresh_projectiles.append_array(registered_projectiles_arr_at_tick)
+			_fresh_registered_projectiles_by_tick.erase(tick)
+		
+		# While iterating over ticks, step every fresh projectile we have.
+		var i := fresh_projectiles.size() - 1
+		while i >= 0:
+			
+			var projectile : Node = fresh_projectiles[i]
+			
+			if is_instance_valid(projectile):
+				projectile.step(NetworkTime.ticktime, tick)
+				_logger.trace("Projectile %s running catch up step at tick: #%s", [projectile.name, tick])
+				# Erase from our list if projectile is not alive anymore.
+				if not projectile.is_alive():
+					_logger.trace("Projectile %s is not alive, erasing at tick: #%s", [projectile.name, tick])
+					fresh_projectiles.remove_at(i)
+			else:
+				_logger.trace("During projectile catch up, projectile at index %s no longer valid, dropping", [i])
+				fresh_projectiles.remove_at(i)
+			
+			i -= 1
+	
+	# Anything registered for tick exact simulated_tick had no history to replay.
+	# They join living unstepped and gets its first step together with _step_living_projectiles.
+	var registered_at_simulated_tick := _fresh_registered_projectiles_by_tick.get(simulated_tick) as Array
+	if registered_at_simulated_tick:
+		_logger.trace(
+			"At Simulated tick #%s, %s projectile(s) joining to living projectiles without catch up.\n" + 
+			"They will be stepped together with living projectiles on this tick. Projectile names %s",
+			[simulated_tick, registered_at_simulated_tick.size(),
+			registered_at_simulated_tick.map(
+				func(p): return _get_projectile_debug_name(p))
+			]
+		)
+		
+		fresh_projectiles.append_array(registered_at_simulated_tick)
+		_fresh_registered_projectiles_by_tick.erase(simulated_tick)
+	
+	if not fresh_projectiles.is_empty():
+		_logger.trace(
+			"Projectile catch up is over: %s projectile(s) promoted to living: %s",
+			[fresh_projectiles.size(), fresh_projectiles.map(
+				func(p): return _get_projectile_debug_name(p))
+			]
+		)
+	
+	# Append our living projectiles list, they are part of the current simulation at this point,
+	# and they will be handled with function _step_living_projectiles.
+	_living_projectiles.append_array(fresh_projectiles)
+	
+	# Since we changed state for simulators by calling _restore_simulator, now restore them to latest.
+	_history_server._restore_simulator(current_tick)
 
 func _is_tick_fresh_for(node: Node, tick: int) -> bool:
 	if not _simulated_ticks.has(node):
@@ -329,3 +444,7 @@ func _trim_ticks_simulated(beginning: int) -> void:
 	for object in _simulated_ticks:
 		_simulated_ticks[object] = _simulated_ticks[object]\
 			.filter(func(tick): return tick >= beginning)
+
+# Helper to get projectile debug name.
+func _get_projectile_debug_name(p) -> String:
+	return p.name if is_instance_valid(p) else "<invalid>"
