@@ -58,6 +58,14 @@ var _simulation_host_delay_ticks : int = ProjectSettings.get_setting("netfox/sim
 # Node to array of ticks
 var _simulated_ticks := {}
 
+# Projectiles that are alive.
+var _living_projectiles : Array[Node] = []
+
+# Fresh registered projectiles.
+# Mapped by tick -> array of projectiles (type of Node) that are estimated to be fired on mapped tick.
+# See register_projectile method.
+var _fresh_registered_projectiles_by_tick : Dictionary[int, Array] = {}
+
 # Grouped simulators depending on their authority modes.
 # Better readability on code / we only check authority on register.
 var _host_simulators : Array[Simulator] = []
@@ -98,6 +106,58 @@ func deregister_simulator(simulator : Simulator) -> void:
 	_client_puppet_simulators.erase(simulator)
 	
 	_simulated_ticks.erase(simulator)
+
+## Register a projectile to be stepped by simulation.
+## This method should only be called on host.
+func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : int) -> void:
+	
+	var has_step_method := projectile.has_method("step")
+	var has_is_alive_method := projectile.has_method("is_alive")
+	
+	if not has_step_method or not has_is_alive_method:
+		_logger.error("Error registering projectile %s : Projectiles must implement step and is_alive methods."
+		% projectile.name)
+		return
+	
+	var enet_peer := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if not enet_peer:
+		_logger.error("Error registering projectile %s : Multiplayer peer is either null or not type of ENet.\n
+		Only ENetMultiplayerPeer is supported for now." % projectile.name)
+		return
+	
+	var firing_peer := enet_peer.get_peer(firing_peer_id)
+	
+	if not firing_peer:
+		_logger.error("Error registering projectile %s: Firing peer #%s is not found on active peers."
+		%[projectile.name, firing_peer_id])
+		return
+	
+	var rtt_ms := firing_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
+	var half_rtt_sec := (rtt_ms * 0.5) / 1000.0
+	var half_rtt_ticks := half_rtt_sec / NetworkTime.ticktime
+
+	var estimated_firing_tick := fired_tick - roundi(half_rtt_ticks)
+	
+	if estimated_firing_tick < 0:
+		_logger.error("Error registering projectile %s: Calculated estimated_firing_tick as negative. Not registering.\n
+		half rtt: %s, fired tick: %s, estimated firing tick: %s"
+		%[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick])
+		return
+	
+	if estimated_firing_tick < NetworkTime.tick - _simulation_history_size:
+		_logger.error("Error registering projectile %s: Calculated estimated_firing_tick is older than history.\n
+		Returning without registering. half rtt: %s, fired tick: %s, estimated firing tick: %s"
+		%[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick])
+		return
+	
+	_logger.debug("Registered projectile %s with stats:\n firing_peer: %s, fired tick: %s, half rtt: %s,
+	estimated firing tick: %s" %[projectile.name, firing_peer_id, fired_tick, half_rtt_sec, estimated_firing_tick])
+	
+	var existing_projectile_arr := _fresh_registered_projectiles_by_tick.get(estimated_firing_tick) as Array
+	if existing_projectile_arr:
+		existing_projectile_arr.push_back(projectile)
+	else:
+		_fresh_registered_projectiles_by_tick[estimated_firing_tick] = [projectile]
 
 func _after_tick(tick : int) -> void:
 	_handle_host_simulators()
@@ -234,6 +294,24 @@ func _handle_host_puppet_simulators() -> void:
 			simulator._run_simulation(NetworkTime.ticktime, simulated_tick, is_fresh)
 		
 		_set_tick_simulated_for(simulator, simulated_tick)
+
+# Steps every already-caught-up living projectile by a single tick.
+# No need to restore world state for living projectiles.
+func _step_living_projectiles(current_tick: int) -> void:
+	
+	# Iterate in reverse because we are also removing.
+	var i := _living_projectiles.size() - 1
+	while i >= 0:
+		var projectile : Node = _living_projectiles[i]
+		
+		if not is_instance_valid(projectile):
+			_living_projectiles.remove_at(i)
+		else:
+			projectile.step(NetworkTime.ticktime, current_tick)
+			if not projectile.is_alive():
+				_living_projectiles.remove_at(i)
+		
+		i -= 1
 
 func _is_tick_fresh_for(node: Node, tick: int) -> bool:
 	if not _simulated_ticks.has(node):
