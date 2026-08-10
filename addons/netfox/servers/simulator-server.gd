@@ -167,11 +167,8 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 		[projectile.name, firing_peer_id, fired_tick, half_rtt_sec, estimated_firing_tick]
 	)
 	
-	var existing_projectile_arr := _fresh_registered_projectiles_by_tick.get(estimated_firing_tick) as Array
-	if existing_projectile_arr:
-		existing_projectile_arr.push_back(projectile)
-	else:
-		_fresh_registered_projectiles_by_tick[estimated_firing_tick] = [projectile]
+	var existing_projectile_arr := _fresh_registered_projectiles_by_tick.get_or_add(estimated_firing_tick, []) as Array
+	existing_projectile_arr.push_back(projectile)
 
 func _after_tick(tick : int) -> void:
 	
@@ -365,8 +362,8 @@ func _catch_up_fresh_projectiles(current_tick: int) -> void:
 		_history_server._restore_simulator(tick)
 		
 		# Get projectiles registered at this tick and add it our fresh_projectiles array.
-		var registered_projectiles_arr_at_tick := _fresh_registered_projectiles_by_tick.get(tick) as Array
-		if registered_projectiles_arr_at_tick:
+		var registered_projectiles_arr_at_tick := _fresh_registered_projectiles_by_tick.get(tick, []) as Array
+		if not registered_projectiles_arr_at_tick.is_empty():
 			_logger.trace(
 				"Tick %s: %s registered projectiles are joining the projectile catch up phase: %s",
 				[tick, registered_projectiles_arr_at_tick.size(),
@@ -399,8 +396,8 @@ func _catch_up_fresh_projectiles(current_tick: int) -> void:
 	
 	# Anything registered for tick exact simulated_tick had no history to replay.
 	# They join living unstepped and gets its first step together with _step_living_projectiles.
-	var registered_at_simulated_tick := _fresh_registered_projectiles_by_tick.get(simulated_tick) as Array
-	if registered_at_simulated_tick:
+	var registered_at_simulated_tick := _fresh_registered_projectiles_by_tick.get(simulated_tick, []) as Array
+	if not registered_at_simulated_tick.is_empty():
 		_logger.trace(
 			"At Simulated tick #%s, %s projectile(s) joining to living projectiles without catch up.\n" + 
 			"They will be stepped together with living projectiles on this tick. Projectile names %s",
