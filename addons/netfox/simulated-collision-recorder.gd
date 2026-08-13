@@ -6,7 +6,7 @@ class_name _SimulatedCollisionRecorder
 ##
 ## Used by [_SimulatorServer] internally.
 
-const SIMULATION_AWARE_GROUP := &"SimulationAwareCollision"
+const SIMULATION_AWARE_GROUP := &"simulation_aware_collision"
 
 var _logger := NetfoxLogger._for_netfox("SimulatedCollisionRecorder")
 
