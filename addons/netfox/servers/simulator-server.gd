@@ -61,7 +61,7 @@ var _simulated_ticks := {}
 # Projectiles that are alive.
 var _living_projectiles : Array[Node] = []
 
-# Helper to record and restore collision-shapes / areas that are in specific group.
+# Helper to record and restore simulation aware collision-shapes/areas.
 var _simulated_collision_recorder : _SimulatedCollisionRecorder = _SimulatedCollisionRecorder.new()
 
 # Fresh registered projectiles.
@@ -85,7 +85,7 @@ func _ready():
 	if not _history_server: _history_server = NetworkHistoryServer
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
 	
-	_simulated_collision_recorder.setup(get_tree())
+	_simulated_collision_recorder.initialize(get_tree())
 
 # Register a simulator node.
 # Will check for authority over inputs and categorize by it.
@@ -192,10 +192,11 @@ func _after_tick(tick : int) -> void:
 		
 		_simulated_collision_recorder.record_tick(NetworkTime.tick - _simulation_host_delay_ticks)
 	
+	# Trim old history that we dont need.
 	var trim_tick := tick - _simulation_history_size
 	if trim_tick >= 0:
 		_trim_ticks_simulated(trim_tick)
-		_simulated_collision_recorder.trim_before(trim_tick)
+		_simulated_collision_recorder.trim_ticks(trim_tick)
 
 ## 1- host simulator:
 ## - Advance the simulation with the inputs tick - 1.
@@ -366,8 +367,13 @@ func _catch_up_fresh_projectiles(current_tick: int) -> void:
 	# Temp array to hold projectiles.
 	var fresh_projectiles : Array[Node] = []
 	
+	# We need to capture current state of collision aware nodes. Because we will mess with their
+	# states during our operation. At the end of the operation we will restore to this state snapshot.
+	var current_collision_state_snapshot_dict := _simulated_collision_recorder.capture_current_state()
+	
 	for tick in range(oldest_tick, simulated_tick):
-		_history_server._restore_simulator(tick)
+		# Restore simulation aware collision nodes.
+		_simulated_collision_recorder.restore_tick(tick)
 		
 		# Get projectiles registered at this tick and add it our fresh_projectiles array.
 		var registered_projectiles_arr_at_tick := _fresh_registered_projectiles_by_tick.get(tick, []) as Array
@@ -430,8 +436,10 @@ func _catch_up_fresh_projectiles(current_tick: int) -> void:
 	# and they will be handled with function _step_living_projectiles.
 	_living_projectiles.append_array(fresh_projectiles)
 	
-	# Since we changed state for simulators by calling _restore_simulator, now restore them to latest.
-	_history_server._restore_simulator(current_tick)
+	# Since we changed states of simulation aware collision nodes by calling
+	# _simulated_collision_recorder.restore_tick, now we should restore them to current state which
+	# we recorded before doing this operation.
+	_simulated_collision_recorder.restore_snapshot(current_collision_state_snapshot_dict)
 
 func _is_tick_fresh_for(node: Node, tick: int) -> bool:
 	if not _simulated_ticks.has(node):
