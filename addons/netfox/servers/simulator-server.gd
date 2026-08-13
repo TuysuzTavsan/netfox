@@ -61,6 +61,9 @@ var _simulated_ticks := {}
 # Projectiles that are alive.
 var _living_projectiles : Array[Node] = []
 
+# Helper to record and restore collision-shapes / areas that are in specific group.
+var _simulated_collision_recorder : _SimulatedCollisionRecorder = _SimulatedCollisionRecorder.new()
+
 # Fresh registered projectiles.
 # Mapped by tick -> array of projectiles (type of Node) that are estimated to be fired on mapped tick.
 # See register_projectile method.
@@ -81,6 +84,8 @@ func _ready():
 	# Ensure dependencies
 	if not _history_server: _history_server = NetworkHistoryServer
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
+	
+	_simulated_collision_recorder.setup(get_tree())
 
 # Register a simulator node.
 # Will check for authority over inputs and categorize by it.
@@ -184,10 +189,13 @@ func _after_tick(tick : int) -> void:
 		# History server only records owned simulator state properties.
 		_history_server._record_simulator(NetworkTime.tick - _simulation_host_delay_ticks)
 		_synchronization_server._synchronize_simulator(NetworkTime.tick - _simulation_host_delay_ticks)
+		
+		_simulated_collision_recorder.record_tick(NetworkTime.tick - _simulation_host_delay_ticks)
 	
 	var trim_tick := tick - _simulation_history_size
 	if trim_tick >= 0:
 		_trim_ticks_simulated(trim_tick)
+		_simulated_collision_recorder.trim_before(trim_tick)
 
 ## 1- host simulator:
 ## - Advance the simulation with the inputs tick - 1.
