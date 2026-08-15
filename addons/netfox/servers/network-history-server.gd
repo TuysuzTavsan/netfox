@@ -289,8 +289,11 @@ func _restore_synchronizer_state(tick: int) -> bool:
 func _restore_input_sender(tick: int) -> bool:
 	return _restore_latest(tick, _input_sender_history)
 
+# Restores non authoritative simulators to known last state.
 func _restore_simulator(tick: int) -> bool:
-	return _restore_latest(tick, _simulator_history)
+	return _restore_latest(tick, _simulator_history, func(subject: Node) -> bool:
+		return not subject.is_multiplayer_authority()
+)
 
 func _get_rollback_input_snapshot(tick: int) -> _Snapshot:
 	return _rb_input_snapshots.get_at(tick)
@@ -371,10 +374,19 @@ func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, p
 			_rb_state_history:
 				_logger.trace("Recorded state @%d: %s", [tick, snapshot])
 
-func _restore_latest(tick: int, history: _PerObjectHistory) -> bool:
+# Restore latest for given history. Optional filter can be used to filter subjects.
+# Return false from filter function to not restore.
+# Return true from filter function to restore.
+# func(subject: Node) -> bool:
+#		return not subject.is_multiplayer_authority()
+func _restore_latest(tick: int, history: _PerObjectHistory, filter: Callable = Callable()) -> bool:
 	var any_applied := false
 
 	for subject in history.subjects():
+		# Optional filter. example: to only restore subjects we dont have authority over.
+		if filter.is_valid() and not filter.call(subject):
+			continue
+		
 		# Grab latest snapshot up to tick
 		var snapshot := history.get_latest_snapshot(tick, subject)
 
