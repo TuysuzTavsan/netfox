@@ -136,19 +136,27 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 	
 	var firing_peer := enet_peer.get_peer(firing_peer_id)
 	
-	if not firing_peer:
+	# Allow valid peers only with the exception being server id.
+	if not firing_peer and firing_peer_id != 1:
 		_logger.error(
 			"Error registering projectile %s: Firing peer #%s is not found on active peers.",
 			[projectile.name, firing_peer_id]
 		)
 		return
 	
-	var rtt_ms := firing_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
-	var half_rtt_sec := (rtt_ms * 0.5) / 1000.0
-	var half_rtt_ticks := half_rtt_sec / NetworkTime.ticktime
+	var rtt_ms := 0.0
+	var half_rtt_sec := 0.0
+	var half_rtt_ticks := 0.0
+	var estimated_firing_tick := fired_tick - _simulation_host_delay_ticks
 	
-	# Dont forget that we synchronize current_tick - _simulation_host_delay_ticks
-	var estimated_firing_tick := fired_tick - roundi(half_rtt_ticks) - _simulation_host_delay_ticks
+	# If firing peer is valid get stats and estimate peers simulation tick.
+	if firing_peer:
+		rtt_ms = firing_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
+		half_rtt_sec = (rtt_ms * 0.5) / 1000.0
+		half_rtt_ticks = half_rtt_sec / NetworkTime.ticktime
+		
+		# Dont forget that we synchronize current_tick - _simulation_host_delay_ticks
+		estimated_firing_tick = fired_tick - roundi(half_rtt_ticks) - _simulation_host_delay_ticks
 	
 	if estimated_firing_tick < 0:
 		_logger.error(
