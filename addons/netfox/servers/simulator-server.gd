@@ -126,17 +126,23 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 		)
 		return
 	
-	var enet_peer := multiplayer.multiplayer_peer as ENetMultiplayerPeer
-	if not enet_peer:
+	## Only allow Offline peer and ENet peer to register, because only Enet has rtt statistic functions.
+	## Offline is for convenience.
+	var enet_peer := multiplayer.multiplayer_peer
+	if enet_peer is not ENetMultiplayerPeer and enet_peer is not OfflineMultiplayerPeer:
 		_logger.error(
 			"Error registering projectile %s : Multiplayer peer is either null or not type of ENet.\n" +
 			"Only ENetMultiplayerPeer is supported for now.", [projectile.name]
 		)
 		return
 	
-	var firing_peer := enet_peer.get_peer(firing_peer_id)
+	var firing_peer : ENetPacketPeer = null
+	
+	if enet_peer is ENetMultiplayerPeer:
+		firing_peer = enet_peer.get_peer(firing_peer_id) as ENetPacketPeer
 	
 	# Allow valid peers only with the exception being server id.
+	# OfflinePeer will return id 1 so should be fine.
 	if not firing_peer and firing_peer_id != 1:
 		_logger.error(
 			"Error registering projectile %s: Firing peer #%s is not found on active peers.",
