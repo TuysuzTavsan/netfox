@@ -222,17 +222,18 @@ func _handle_host_simulators() -> void:
 	
 	for simulator in _host_simulators:
 		
+		var input_subjects := simulator.listened_input_sender._input_properties.get_subjects()
+		var state_subjects := simulator._state_properties.get_subjects()
+		
 		# Save input properties before messing them up.
 		simulator.listened_input_sender._save_properties()
 		
-		# Retrieve the input history and apply manually.
-		var input_history := _history_server._input_sender_history
-		for subject in simulator.listened_input_sender._input_properties.get_subjects():
-			input_history.ensure_snapshot(current_tick - 1, subject, true).apply()
+		# Apply inputs of the previous tick.
+		_history_server._restore_input_sender_subjects(input_subjects, current_tick - 1)
 		
 		var is_fresh := _is_tick_fresh_for(simulator, current_tick)
 		simulator._run_simulation(NetworkTime.ticktime, current_tick, is_fresh)
-		_history_server._record_individual_simulator(simulator, current_tick)
+		_history_server._record_simulator_subjects(state_subjects, current_tick)
 		_set_tick_simulated_for(simulator, current_tick)
 		
 		# Restore messed up properties.
@@ -248,8 +249,11 @@ func _handle_local_authoritative_simulators() -> void:
 	
 	for simulator in _local_authoritative_simulators:
 		
+		var input_subjects := simulator.listened_input_sender._input_properties.get_subjects()
+		var state_subjects := simulator._state_properties.get_subjects()
+		
 		var latest_truth_tick := _history_server.get_latest_simulator_for_snapshot(
-			simulator._state_properties.get_subjects(),
+			state_subjects,
 			current_tick)
 		
 		var latest_truth_snapshot := _history_server._get_simulator_snapshot(latest_truth_tick)
@@ -263,14 +267,12 @@ func _handle_local_authoritative_simulators() -> void:
 				"Running simulation for only current tick."
 			)
 			
-			# Retrieve the input history and apply manually.
-			var input_history := _history_server._input_sender_history
-			for subject in simulator.listened_input_sender._input_properties.get_subjects():
-				input_history.ensure_snapshot(current_tick - 1, subject, true).apply()
+			# Apply inputs of the previous tick.
+			_history_server._restore_input_sender_subjects(input_subjects, current_tick - 1)
 			
 			var is_fresh := _is_tick_fresh_for(simulator, current_tick)
 			simulator._run_simulation(NetworkTime.ticktime, current_tick, is_fresh)
-			_history_server._record_individual_simulator(simulator, current_tick)
+			_history_server._record_simulator_subjects(state_subjects, current_tick)
 			_set_tick_simulated_for(simulator, current_tick)
 			
 			# Restore messed up properties.
@@ -278,21 +280,16 @@ func _handle_local_authoritative_simulators() -> void:
 			continue
 		
 		# Apply truth from history, which has diffs merged into full state.
-		_history_server._restore_simulator_subjects(
-			simulator._state_properties.get_subjects(),
-			latest_truth_tick)
-		# Retrieve the input history to apply it manually.
-		var input_history := _history_server._input_sender_history
+		_history_server._restore_simulator_subjects(state_subjects, latest_truth_tick)
+		
 		for i in range(latest_truth_tick + 1, current_tick + 1):
-			
-			for subject in simulator.listened_input_sender._input_properties.get_subjects():
-				var snapshot : _ObjectSnapshot = input_history.ensure_snapshot(i - 1, subject, false)
-				if snapshot:
-					snapshot.apply()
+			# Apply inputs of the previous tick. If there's no input recorded
+			# for it, the latest input before it is applied.
+			_history_server._restore_input_sender_subjects(input_subjects, i - 1)
 			
 			var is_fresh := _is_tick_fresh_for(simulator, i)
 			simulator._run_simulation(NetworkTime.ticktime, i, is_fresh)
-			_history_server._record_individual_simulator(simulator, i)
+			_history_server._record_simulator_subjects(state_subjects, i)
 			_set_tick_simulated_for(simulator, i)
 		
 		# Restore messed up properties.
@@ -307,6 +304,12 @@ func _handle_host_puppet_simulators() -> void:
 	var current_tick := NetworkTime.tick
 	
 	var simulated_tick := current_tick - _simulation_host_delay_ticks
+	
+	# Simulating a tick uses the inputs of the tick before it, so the first
+	# tick with any inputs to simulate is 1. Before that, simulated_tick - 1 is
+	# negative, and would match the -1 returned for "no input found" below.
+	if simulated_tick < 1:
+		return
 	
 	for simulator in _host_puppet_simulators:
 		

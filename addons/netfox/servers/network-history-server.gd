@@ -227,36 +227,36 @@ func _record_simulator(tick: int) -> void:
 		return subject.is_multiplayer_authority()
 	)
 
-# Records given simulator for given tick even though it doesnt have authority.
-# This function is used by SimulatorServer to record simulators that we own 
-# input but not state.
-# As a design perspective, a game should have max 1-2 simulators like this.
-# So this is not really expensive and not usually used on servers.
-# No auth history is overriden.
-# No snapshot is written.
-func _record_individual_simulator(simulator : Simulator, tick: int) -> void:
-	var property_pool := _PropertyPool.new()
-	property_pool.set_from_paths(simulator.root, simulator.state_properties)
-	
-	for subject in property_pool.get_subjects():
+# Records the current state of the given simulator subjects for the given tick,
+# even if we don't have authority over them.
+#
+# Used by SimulatorServer to record simulators one by one, e.g. predicted state
+# of local authoritative simulators (we own the input, but not the state).
+# Properties are the ones registered with [method register_simulator].
+#
+# Existing auth data is never overwritten. Only the per-object history is
+# written, no per-tick snapshot.
+func _record_simulator_subjects(subjects: Array, tick: int) -> void:
+	for subject in subjects:
 		assert(subject is Node, "Only nodes supported for now!")
-		
-		var is_auth := subject.is_multiplayer_authority() as bool
-		
+
+		# Never overwrite auth data, e.g. truth received from the host
 		if _simulator_history.is_auth(tick, subject):
 			continue
-		
-		var subject_snapshot := _simulator_history.ensure_snapshot(tick, subject, true)
-		if subject_snapshot == null:
+
+		var properties := _simulator_properties.get_properties_of(subject)
+		assert(not properties.is_empty(), "Simulator subject recorded without registered properties! Please report a bug!")
+
+		var object_snapshot := _simulator_history.ensure_snapshot(tick, subject, true)
+		if object_snapshot == null:
 			_logger.warning("Dropping recorded tick @%d for subject %s as out-of-bounds", [tick, subject])
 			continue
-		
-		assert(not property_pool.get_properties_of(subject).is_empty(), "Subject present in property pool without properties! Please report a bug!")
-		for property in property_pool.get_properties_of(subject):
-			subject_snapshot.record_property(property)
-		subject_snapshot.set_auth(is_auth)
-		
-		_logger.trace("Recorded simulator state @%d: %s", [tick, subject_snapshot])
+
+		for property in properties:
+			object_snapshot.record_property(property)
+		object_snapshot.set_auth((subject as Node).is_multiplayer_authority())
+
+		_logger.trace("Recorded simulator state @%d: %s", [tick, object_snapshot])
 
 func _restore_rollback_input(tick: int) -> bool:
 	return _restore_latest(tick, _rb_input_history)
@@ -269,6 +269,15 @@ func _restore_synchronizer_state(tick: int) -> bool:
 
 func _restore_input_sender(tick: int) -> bool:
 	return _restore_latest(tick, _input_sender_history)
+
+# Applies the latest input_sender inputs at or before the given tick, but only
+# to the given subjects, so a single InputSender can be restored without
+# touching the others. Nothing is written to the history.
+func _restore_input_sender_subjects(subjects: Array, tick: int) -> void:
+	for subject in subjects:
+		var object_snapshot := _input_sender_history.get_latest_snapshot(tick, subject)
+		if object_snapshot:
+			object_snapshot.apply()
 
 # Applies the auth simulator state at the given tick to each of the subjects.
 # Values come from the per-object history, so diffs received for the tick are
@@ -335,7 +344,7 @@ func _merge_input_sender(snapshot: _Snapshot) -> bool:
 #
 # Auth data in the history must only ever hold values received from the host.
 # Local authoritative simulators record their own predictions into the same
-# history (see _record_individual_simulator), so before merging, each subject's
+# history (see _record_simulator_subjects), so before merging, each subject's
 # entry at this tick is reset to its latest auth state. This way carry-forward
 # never copies predicted values into auth data.
 func _merge_simulator(snapshot: _Snapshot) -> bool:
