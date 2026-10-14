@@ -54,7 +54,6 @@ var _max_packet_size := ProjectSettings.get_setting("netfox/general/max_sync_pac
 var _input_sender_enable_broadcast := ProjectSettings.get_setting("netfox/input_sender/enable_input_broadcast", false) as bool
 var _input_sender_redundancy := ProjectSettings.get_setting("netfox/input_sender/input_redundancy", 3) as int
 
-var _last_simulator_state_sent := _Snapshot.new(0)
 var _simulator_enable_diffs := ProjectSettings.get_setting("netfox/simulator/enable_diff_states", true) as bool
 var _simulator_full_interval := ProjectSettings.get_setting("netfox/simulator/full_state_interval", 24) as int
 var _simulator_full_scheduler := _IntervalScheduler.new(_simulator_full_interval)
@@ -375,11 +374,10 @@ func _synchronize_input_sender(tick: int) -> void:
 func _synchronize_simulator(tick: int) -> void:
 	# We don't own state, nothing to synchronize
 	if _simulator_owned_properties.is_empty():
-		_logger.trace("No owned simulator property to synchronize, returning.")
 		return
-	
+
+	# Grab snapshot from NetworkHistoryServer
 	var snapshot := NetworkHistoryServer._get_simulator_snapshot(tick)
-	
 	if not snapshot:
 		# No data for tick
 		return
@@ -387,12 +385,17 @@ func _synchronize_simulator(tick: int) -> void:
 	if snapshot.is_empty():
 		# Nothing to send
 		return
-	
+
 	# Figure out whether to send full- or diff state
 	var is_full := _simulator_full_scheduler.is_now()
 	if not _simulator_enable_diffs:
 		is_full = true
-	
+
+	# Check if we have history to diff to
+	var reference_snapshot := NetworkHistoryServer._get_simulator_snapshot(tick - 1)
+	if not reference_snapshot:
+		is_full = true
+
 	if is_full:
 		# Send full states
 		for peer in multiplayer.get_peers():
@@ -400,8 +403,26 @@ func _synchronize_simulator(tick: int) -> void:
 
 			var packets := _dense_serializer.write_for(peer, snapshot, _simulator_owned_properties, filter)
 			for packet in packets:
-				_logger.trace("Submitting simulator full state:%s to peer:%s", [snapshot, peer])
 				_cmd_full_simulator.send(packet, peer)
+
+			NetworkPerformance.push_full_state_props(snapshot.size())
+			NetworkPerformance.push_sent_state_props(snapshot.size())
+	else:
+		var diff := _Snapshot.make_patch(reference_snapshot, snapshot)
+		if diff.is_empty():
+			# Nothing changed, don't send anything
+			return
+
+		# Send diff states
+		for peer in multiplayer.get_peers():
+			var filter := func(subject): return _is_node_visible_to(peer, subject)
+
+			var packets := _sparse_serializer.write_for(peer, diff, _simulator_owned_properties, filter)
+			for packet in packets:
+				_cmd_diff_simulator.send(packet, peer)
+
+			NetworkPerformance.push_full_state_props(snapshot.size())
+			NetworkPerformance.push_sent_state_props(diff.size())
 
 func _init(
 		p_command_server: _NetworkCommandServer = null,
@@ -437,7 +458,8 @@ func _ready():
 	
 	_cmd_input_sender = _command_server.register_command(_handle_input_sender, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	
-	# TODO which one makes sense ordered or not ?
+	# Unreliable, same as rollback state. Every packet carries its own tick, and
+	# diffs lost on the way are corrected by the next full state.
 	_cmd_full_simulator = _command_server.register_command(_handle_full_simulator, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	_cmd_diff_simulator = _command_server.register_command(_handle_diff_simulator, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	
@@ -507,25 +529,27 @@ func _handle_input_sender(sender : int, data : PackedByteArray) -> void:
 		if NetworkHistoryServer._merge_input_sender(snapshot):
 			_on_input_sender.emit(snapshot)
 
-func _handle_full_simulator(sender : int, data : PackedByteArray) -> void:
+func _handle_full_simulator(sender: int, data: PackedByteArray) -> void:
 	var buffer := StreamPeerBuffer.new()
 	buffer.data_array = data
-	
-	var snapshot := _dense_serializer.read_from(sender, _simulator_properties, buffer, true)
-	snapshot.sanitize(sender)
-	
-	_logger.trace("Ingested simulator full state: %s", [snapshot])
-	if NetworkHistoryServer._merge_simulator(snapshot):
-		_on_simulator.emit(snapshot)
 
-func _handle_diff_simulator(sender : int, data : PackedByteArray) -> void:
+	var snapshot := _dense_serializer.read_from(sender, _simulator_properties, buffer, true)
+
+	_ingest_simulator(sender, snapshot)
+
+func _handle_diff_simulator(sender: int, data: PackedByteArray) -> void:
 	var buffer := StreamPeerBuffer.new()
 	buffer.data_array = data
-	
-	var snapshot := _sparse_serializer.read_from(sender, _simulator_properties, buffer)
+
+	var diff := _sparse_serializer.read_from(sender, _simulator_properties, buffer)
+	_logger.trace("Received simulator diff state for @%d", [diff.tick])
+
+	_ingest_simulator(sender, diff)
+
+func _ingest_simulator(sender: int, snapshot: _Snapshot) -> void:
 	snapshot.sanitize(sender)
-	
-	_logger.trace("Ingested simulator diff state: %s", [snapshot])
+
+	_logger.trace("Ingesting simulator state: %s", [snapshot])
 	if NetworkHistoryServer._merge_simulator(snapshot):
 		_on_simulator.emit(snapshot)
 

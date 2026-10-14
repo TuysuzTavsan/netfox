@@ -153,37 +153,18 @@ func get_latest_input_sender_for(subjects: Array, tick: int) -> int:
 func get_latest_simulator_for(subjects: Array, tick: int) -> int:
 	return _get_latest_for(subjects, tick, _simulator_history)
 
-## Get the latest tick where any of the [param subjects] had simulator snapshot available.
-## Ignores tick where we dont have full snapshot. (missing properties)
+## Get the latest tick at or before [param tick] where the simulator snapshot
+## has data for all of the [param subjects]. Returns -1 if there's none.
 func get_latest_simulator_for_snapshot(subjects: Array, tick: int) -> int:
-	
-	var full_subject_ticks : Array[int] = []
-	
-	for index in range(_simulator_snapshots.get_earliest_index(), _simulator_snapshots.get_latest_index() + 1):
+	# Walk backwards from the newest tick, so the first match is the latest one
+	var latest_index := mini(tick, _simulator_snapshots.get_latest_index())
+
+	for index in range(latest_index, _simulator_snapshots.get_earliest_index() - 1, -1):
 		var snapshot := _simulator_snapshots.get_at(index) as _Snapshot
-		
-		if not snapshot:
-			continue
-		
-		var not_has_any_subject : bool = false
-		
-		for subject in subjects:
-			if not snapshot.has_subject(subject):
-				not_has_any_subject = true
-				break
-		
-		if not not_has_any_subject:
-			# We have all subjects in this snapshot.
-			full_subject_ticks.push_back(snapshot.tick)
-	
-	
-	var latest_tick : int = -1
-	if full_subject_ticks.size() > 0:
-		var latest_in_arr = full_subject_ticks.max()
-		if latest_in_arr:
-			latest_tick = latest_in_arr
-	
-	return latest_tick
+		if snapshot and snapshot.has_subjects(subjects):
+			return index
+
+	return -1
 
 ## Return how old is the latest rollback input data for any of the
 ## [param subjects], in ticks
@@ -289,6 +270,25 @@ func _restore_synchronizer_state(tick: int) -> bool:
 func _restore_input_sender(tick: int) -> bool:
 	return _restore_latest(tick, _input_sender_history)
 
+# Applies the auth simulator state at the given tick to each of the subjects.
+# Values come from the per-object history, so diffs received for the tick are
+# already merged on top of the previous auth state.
+#
+# NOTE: On a fresh connection, if a diff arrives before the first full state,
+# the auth state only holds the properties in that diff. Only those are
+# applied, the rest are filled in by the next full state.
+func _restore_simulator_subjects(subjects: Array, tick: int) -> void:
+	for subject in subjects:
+		# Shouldn't happen, the tick is picked from received snapshots. It only
+		# can if the state was stored in _simulator_snapshots, but was too old
+		# for _merge_history. Never apply non-auth (e.g. predicted) data as truth.
+		if not _simulator_history.is_auth(tick, subject):
+			_logger.warning("No auth simulator state for %s @%d, skipping restore", [subject, tick])
+			continue
+
+		var object_snapshot := _simulator_history.get_latest_snapshot(tick, subject)
+		object_snapshot.apply()
+
 # Restores non authoritative simulators to known last state.
 func _restore_simulator(tick: int) -> bool:
 	return _restore_latest(tick, _simulator_history, func(subject: Node) -> bool:
@@ -326,9 +326,24 @@ func _merge_input_sender(snapshot: _Snapshot) -> bool:
 	_merge_snapshot(snapshot, _input_sender_snapshots, true)
 	return _merge_history(snapshot, _input_sender_history, true)
 
+# Merges a simulator state received from the host, either full or diff.
+#
+# Works the same way as merging rollback state: the per-tick snapshot keeps what
+# was received, and the per-object history is merged with carry-forward. A diff
+# only contains properties that changed since the previous tick, carry-forward
+# fills in the rest from the previous tick.
+#
+# Auth data in the history must only ever hold values received from the host.
+# Local authoritative simulators record their own predictions into the same
+# history (see _record_individual_simulator), so before merging, each subject's
+# entry at this tick is reset to its latest auth state. This way carry-forward
+# never copies predicted values into auth data.
 func _merge_simulator(snapshot: _Snapshot) -> bool:
-	_merge_snapshot(snapshot, _simulator_snapshots, true)
-	return _merge_history(snapshot, _simulator_history, true)
+	for subject in snapshot.get_subjects():
+		_simulator_history.reset_to_auth(snapshot.tick, subject)
+
+	_merge_snapshot(snapshot, _simulator_snapshots)
+	return _merge_history(snapshot, _simulator_history)
 
 func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, property_pool: _PropertyPool, only_auth: bool, auth_filter: Callable) -> void:
 	var snapshot := snapshots.get_at(tick, _Snapshot.new(tick)) as _Snapshot

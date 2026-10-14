@@ -277,7 +277,10 @@ func _handle_local_authoritative_simulators() -> void:
 			simulator.listened_input_sender._restore_properties()
 			continue
 		
-		simulator._apply_snapshot_for_self(latest_truth_snapshot)
+		# Apply truth from history, which has diffs merged into full state.
+		_history_server._restore_simulator_subjects(
+			simulator._state_properties.get_subjects(),
+			latest_truth_tick)
 		# Retrieve the input history to apply it manually.
 		var input_history := _history_server._input_sender_history
 		for i in range(latest_truth_tick + 1, current_tick + 1):

@@ -215,20 +215,6 @@ func _reprocess_settings() -> void:
 	
 	process_settings()
 
-# Helper function to apply given snapshot for only this node.
-# TODO (same todo with input_sender)?
-# Applying whole snapshot and iterating over ticks would be nicer
-# if we decide to have singleton for this
-func _apply_snapshot_for_self(snapshot : _Snapshot) -> void:
-	_logger.trace("Applying snapshot for self :%s", [snapshot])
-	for subject in _state_properties.get_subjects():
-		for property in _state_properties.get_properties_of(subject):
-			
-			if snapshot.has_property(subject, property):
-				var value := snapshot.get_property(subject, property)
-				# TODO is this should be node.set_indexed ??
-				subject.set_indexed(property, value)
-
 # Helper function to run simulation with given parameters.
 # This function is used by SimulatorServer internally. 
 func _run_simulation(delta : float, tick : int, is_fresh : bool) -> void:
