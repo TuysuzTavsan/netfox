@@ -10,19 +10,17 @@ var _auth_subjects := _Set.new()
 static func make_patch(from: _Snapshot, to: _Snapshot, tick: int = to.tick) -> _Snapshot:
 	var patch := _Snapshot.new(tick)
 
-	for subject in from.get_subjects():
+	for subject in to.get_subjects():
 		assert(is_instance_valid(subject))
 
-		# Target has no knowledge of subject, don't patch
-		if not to.has_subject(subject):
-			continue
 		# Only patch to auth subjects
 		if not to.is_auth(subject):
 			continue
 
 		for property in to._data[subject]:
 			# Target snapshot has different value, patch it
-			if from.get_property(subject, property) != to.get_property(subject, property):
+			if not from.has_property(subject, property) or \
+				from.get_property(subject, property) != to.get_property(subject, property):
 				patch.set_property(subject, property, to.get_property(subject, property))
 		patch.set_auth(subject, to.is_auth(subject))
 
@@ -104,9 +102,9 @@ func merge(snapshot: _Snapshot) -> bool:
 
 func apply() -> void:
 	for subject in _data:
-		for property in _data[subject]:
-			var value = _data[subject][property]
-			(subject as Object).set_indexed(property, value)
+		var props := _data[subject] as Dictionary
+		for property in props:
+			(subject as Object).set_indexed(property, props[property])
 
 func sanitize(sender: int) -> void:
 	var invalid_subjects := []
@@ -116,7 +114,7 @@ func sanitize(sender: int) -> void:
 				invalid_subjects.append(subject)
 
 	for subject in invalid_subjects:
-		_data.erase(invalid_subjects)
+		_data.erase(subject)
 
 func has_subject(subject: Object, require_auth: bool = false) -> bool:
 	if not _data.has(subject):

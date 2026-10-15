@@ -114,6 +114,21 @@ func deregister(node: Node) -> void:
 			var snapshot := value as _Snapshot
 			snapshot.erase_subject(node)
 
+## Forget all recorded history, while keeping the registered properties
+## [br][br]
+## History is indexed by tick, so data from a previous session must not carry
+## over to the next one. Called by [method _NetworkTime.stop].
+func reset() -> void:
+	_rb_input_history = _PerObjectHistory.new(_rb_history_size)
+	_rb_state_history = _PerObjectHistory.new(_rb_history_size)
+	_sync_history = _PerObjectHistory.new(_sync_history_size)
+
+	_rb_input_snapshots = _HistoryBuffer.new(_rb_history_size)
+	_rb_state_snapshots = _HistoryBuffer.new(_rb_history_size)
+	_sync_state_snapshots = _HistoryBuffer.new(_sync_history_size)
+
+	_ignored_subjects.clear()
+
 ## Do not record [param subject]
 ## [br][br]
 ## Can be used in [code]_rollback_tick()[/code] in case node prediction is
@@ -362,7 +377,7 @@ func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, p
 	if not snapshots.has_at(tick):
 		snapshots.set_at(tick, snapshot)
 
-	for subject in property_pool.get_subjects():
+	for subject in property_pool.get_subjects_raw():
 		assert(subject is Node, "Only nodes supported for now!")
 
 		# Don't record history when subject is not alive to prevent state corruption.
@@ -388,10 +403,12 @@ func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, p
 			_logger.warning("Dropping recorded tick @%d for subject %s as out-of-bounds", [tick, subject])
 			continue
 
-		assert(not property_pool.get_properties_of(subject).is_empty(), "Subject present in property pool without properties! Please report a bug!")
-		for property in property_pool.get_properties_of(subject):
-			subject_snapshot.record_property(property)
-			snapshot.record_property(subject, property)
+		var properties := property_pool.get_properties_of_raw(subject)
+		assert(not properties.is_empty(), "Subject present in property pool without properties! Please report a bug!")
+		for property in properties:
+			var value: Variant = subject.get_indexed(property)
+			subject_snapshot.set_value(property, value)
+			snapshot.set_property(subject, property, value)
 		snapshot.set_auth(subject, is_auth)
 		subject_snapshot.set_auth(is_auth)
 
@@ -408,12 +425,12 @@ func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, p
 #		return not subject.is_multiplayer_authority()
 func _restore_latest(tick: int, history: _PerObjectHistory, filter: Callable = Callable()) -> bool:
 	var any_applied := false
-
-	for subject in history.subjects():
+  
+for subject in history.subjects_raw():
 		# Optional filter. example: to only restore subjects we dont have authority over.
 		if filter.is_valid() and not filter.call(subject):
 			continue
-
+      
 		# Grab latest snapshot up to tick
 		var snapshot := history.get_latest_snapshot(tick, subject)
 
