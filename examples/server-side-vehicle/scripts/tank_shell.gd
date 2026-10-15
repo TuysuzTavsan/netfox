@@ -20,6 +20,6 @@ func _on_area_3d_body_entered(body):
 			if firing_tank:
 				print("%s killed another tank +1 score!" %firing_tank.name)
 				firing_tank.score += 1
-	
-	
+
+
 	queue_free()

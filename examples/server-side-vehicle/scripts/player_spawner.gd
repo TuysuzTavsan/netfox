@@ -57,7 +57,7 @@ func _spawn(id: int):
 	if input != null:
 		input.set_multiplayer_authority(id)
 		print("Set input(%s) ownership to %s" % [input.name, id])
-	
+
 	add_child(avatar)
 
 func get_next_spawn_point(peer_id: int, spawn_idx: int = 0) -> Vector3:

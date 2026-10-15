@@ -176,8 +176,8 @@ var _latest_received_tick: int = -1
 var _last_sent_tick: int = -1
 var _last_sent_view_delay: int = -1
 
-# Host side: peer id -> _HistoryBuffer of stamped tick -> view delay
-var _view_delay_histories: Dictionary[int, _HistoryBuffer] = {}
+# Host side: peer id (int) -> _HistoryBuffer of stamped tick -> view delay
+var _view_delay_histories: Dictionary = {}
 
 ## Initialize needs to be called by the owner node, from its _ready().
 ## Commands must be registered in the same order on every peer, which is

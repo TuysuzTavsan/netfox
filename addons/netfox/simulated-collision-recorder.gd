@@ -10,8 +10,8 @@ const SIMULATION_AWARE_GROUP := &"simulation_aware_collision"
 
 var _logger := NetfoxLogger._for_netfox("SimulatedCollisionRecorder")
 
-# tick -> Dictionary[Node, _CollisionSnapshot]
-var _snapshots_by_tick : Dictionary[int, Dictionary] = {}
+# tick (int) -> Dictionary of Node -> _CollisionSnapshot
+var _snapshots_by_tick : Dictionary = {}
 var _tracked_nodes : Array[Node] = []
 
 ## Inner base struct for recording collision snapshot per type.
@@ -25,11 +25,11 @@ class _CollisionSnapshot:
 class _ShapeSnapshot3D extends _CollisionSnapshot:
 	var global_transform : Transform3D
 	var disabled : bool
-	
+
 	func _init(node: CollisionShape3D) -> void:
 		global_transform = node.global_transform
 		disabled = node.disabled
-	
+
 	func restore_node(node: Node) -> void:
 		node.global_transform = global_transform
 		node.disabled = disabled
@@ -37,11 +37,11 @@ class _ShapeSnapshot3D extends _CollisionSnapshot:
 class _ShapeSnapshot2D extends _CollisionSnapshot:
 	var global_transform : Transform2D
 	var disabled : bool
-	
+
 	func _init(node: CollisionShape2D) -> void:
 		global_transform = node.global_transform
 		disabled = node.disabled
-	
+
 	func restore_node(node: Node) -> void:
 		node.global_transform = global_transform
 		node.disabled = disabled
@@ -51,13 +51,13 @@ class _AreaSnapshot3D extends _CollisionSnapshot:
 	var monitoring : bool
 	var monitorable : bool
 	var collision_layer : int
-	
+
 	func _init(node: Area3D) -> void:
 		global_transform = node.global_transform
 		monitoring = node.monitoring
 		monitorable = node.monitorable
 		collision_layer = node.collision_layer
-	
+
 	func restore_node(node: Node) -> void:
 		node.global_transform = global_transform
 		node.monitoring = monitoring
@@ -69,13 +69,13 @@ class _AreaSnapshot2D extends _CollisionSnapshot:
 	var monitoring : bool
 	var monitorable : bool
 	var collision_layer : int
-	
+
 	func _init(node: Area2D) -> void:
 		global_transform = node.global_transform
 		monitoring = node.monitoring
 		monitorable = node.monitorable
 		collision_layer = node.collision_layer
-	
+
 	func restore_node(node: Node) -> void:
 		node.global_transform = global_transform
 		node.monitoring = monitoring
@@ -86,13 +86,13 @@ class _AreaSnapshot2D extends _CollisionSnapshot:
 ## Because refcounted classes doesnt have access to scene tree.
 func initialize(tree: SceneTree) -> void:
 	tree.node_added.connect(_on_node_added)
-	
+
 	var existing_nodes := tree.get_nodes_in_group(SIMULATION_AWARE_GROUP)
 	_logger.trace(
 		"Initializing collision recorder, found %s existing node(s) in group %s",
 		[existing_nodes.size(), SIMULATION_AWARE_GROUP]
 	)
-	
+
 	for node in existing_nodes:
 		_track(node)
 
@@ -143,20 +143,21 @@ func _take_snapshot_for_node(node: Node) -> _CollisionSnapshot:
 
 ## Record the given tick for simulation aware collision nodes.
 func record_tick(tick: int) -> void:
-	var snapshot_dict : Dictionary[Node, _CollisionSnapshot] = {}
+	# Node -> _CollisionSnapshot
+	var snapshot_dict : Dictionary = {}
 
 	var i := _tracked_nodes.size() - 1
 	while i >= 0:
 		var node := _tracked_nodes[i]
-		
+
 		# While we are iterating tracked_nodes, remove if anyone is invalid.
-		
+
 		if not is_instance_valid(node):
 			_logger.trace("while recording tick(%s): dropping invalid node at index %s", [tick, i])
 			_tracked_nodes.remove_at(i)
 			i -= 1
 			continue
-		
+
 		snapshot_dict[node] = _take_snapshot_for_node(node)
 		i -= 1
 
@@ -173,15 +174,15 @@ func restore_tick(tick: int) -> void:
 			[tick]
 		)
 		return
-	
+
 	var snapshot_dict := _snapshots_by_tick[tick] as Dictionary
 	var restored_count := 0
 	var excluded_count := 0
-	
+
 	for node in _tracked_nodes:
 		if not is_instance_valid(node):
 			continue
-		
+
 		if snapshot_dict.has(node):
 			var snap : _CollisionSnapshot = snapshot_dict[node]
 			snap.restore_node(node)
@@ -190,7 +191,7 @@ func restore_tick(tick: int) -> void:
 			# Not tracked yet at this historical tick -> didn't exist in the sim yet.
 			_exclude_from_collision(node)
 			excluded_count += 1
-	
+
 	_logger.trace(
 		"restored tick(%s): restored %s node(s), excluded %s node(s) not yet alive at this tick",
 		[tick, restored_count, excluded_count]
@@ -212,7 +213,8 @@ func _exclude_from_collision(node: Node) -> void:
 ## This is used to restore the latest after our operation is done.
 ## Internally [_SimulatorServer] will restore to this state by calling restore_snapshot.
 func capture_current_state() -> Dictionary:
-	var live : Dictionary[Node, _CollisionSnapshot] = {}
+	# Node -> _CollisionSnapshot
+	var live : Dictionary = {}
 	var i := _tracked_nodes.size() - 1
 	while i >= 0:
 		var node := _tracked_nodes[i]
@@ -224,7 +226,7 @@ func capture_current_state() -> Dictionary:
 
 		live[node] = _take_snapshot_for_node(node)
 		i -= 1
-	
+
 	_logger.trace("captured current state(): captured %s node(s)", [live.size()])
 	return live
 
@@ -232,16 +234,16 @@ func capture_current_state() -> Dictionary:
 ## Restore simulation aware collision nodes to given snapshot dict.
 func restore_snapshot(snapshot_dict: Dictionary) -> void:
 	var restored_count := 0
-	
+
 	for node in snapshot_dict:
-		
+
 		if not is_instance_valid(node):
 			continue
-		
+
 		var collision_snapshot : _CollisionSnapshot = snapshot_dict[node]
 		collision_snapshot.restore_node(node)
 		restored_count += 1
-	
+
 	_logger.trace("restored snapshot(): restored %s node(s) to captured live state", [restored_count])
 
 ## Trim ticks that we dont need anymore.

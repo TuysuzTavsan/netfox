@@ -109,7 +109,7 @@ func deregister(node: Node) -> void:
 	# Erase from per-tick history
 	for history in [_rb_state_snapshots, _rb_input_snapshots,\
 	_sync_state_snapshots, _input_sender_snapshots, _simulator_snapshots]:
-		
+
 		for value in history.values():
 			var snapshot := value as _Snapshot
 			snapshot.erase_subject(node)
@@ -273,9 +273,6 @@ func _restore_rollback_state(tick: int) -> bool:
 func _restore_synchronizer_state(tick: int) -> bool:
 	return _restore_latest(tick, _sync_history)
 
-func _restore_input_sender(tick: int) -> bool:
-	return _restore_latest(tick, _input_sender_history)
-
 # Applies the latest input_sender inputs at or before the given tick, but only
 # to the given subjects, so a single InputSender can be restored without
 # touching the others. Nothing is written to the history.
@@ -416,7 +413,7 @@ func _restore_latest(tick: int, history: _PerObjectHistory, filter: Callable = C
 		# Optional filter. example: to only restore subjects we dont have authority over.
 		if filter.is_valid() and not filter.call(subject):
 			continue
-		
+
 		# Grab latest snapshot up to tick
 		var snapshot := history.get_latest_snapshot(tick, subject)
 

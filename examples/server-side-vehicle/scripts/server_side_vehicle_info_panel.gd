@@ -14,13 +14,13 @@ func _process(_delta):
 	var tank = get_parent()
 	if not tank:
 		return
-	
+
 	var percentage = (NetworkTime.tick - tank._last_fire_tick) as float / tank.fire_cooldown_tick as float
 	reload_progress_bar.value = percentage * 100.0
-	
+
 	if reload_progress_bar.value > 99:
 		reload_label.text = "Loaded"
 	else:
 		reload_label.text = "Loading"
-	
+
 	score_label.text = "Score: " + str(tank.score)

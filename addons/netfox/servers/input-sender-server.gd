@@ -41,7 +41,7 @@ var _last_recorded_tick : int = -1
 
 # Inputs held back for a tick because the input lead shrank, see
 # _record_and_send_inputs. Maps InputSender -> input Dictionary.
-var _held_inputs : Dictionary[InputSender, Dictionary] = {}
+var _held_inputs : Dictionary = {}
 
 # Every registered InputSender.
 var _input_senders : Array[InputSender] = []
@@ -54,7 +54,7 @@ func _ready():
 	# Ensure dependencies
 	if not _history_server: _history_server = NetworkHistoryServer
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
-	
+
 	# Inputs are recorded after every tick, the same way as for rollback, so
 	# users can gather inputs the same way: set the input properties before
 	# the tick, e.g. on NetworkTime.before_tick_loop or before_tick.
@@ -64,13 +64,13 @@ func _ready():
 	# whatever input_applied handlers change is recorded by StateSynchronizers
 	# as the state of tick + 1, which happens after after_tick.
 	NetworkTime.after_tick.connect(_after_tick)
-	
+
 	# Ticks start over when NetworkTime starts, so do the stamps.
 	NetworkTime.after_sync.connect(_reset_stamps)
 
 func _after_tick(_delta: float, tick: int) -> void:
 	_record_and_send_inputs(tick)
-	
+
 	if multiplayer.is_server():
 		_apply_inputs(tick)
 
@@ -84,24 +84,24 @@ func _after_tick(_delta: float, tick: int) -> void:
 # at any time works from the next tick on.
 func _apply_inputs(tick: int) -> void:
 	for input_sender in _input_senders:
-		if not input_sender.input_applied.has_connections():
+		if input_sender.input_applied.get_connections().is_empty():
 			continue
-		
+
 		var input_subjects := input_sender._input_properties.get_subjects()
 		var latest_input_tick := _history_server.get_latest_input_sender_for(input_subjects, tick)
 		var is_predicted := latest_input_tick != tick
-		
+
 		# Save the input properties, so the inputs gathered on this peer are
 		# untouched by what we apply here.
 		input_sender._save_properties()
-		
+
 		# Apply the inputs of this tick, or the latest ones before it.
 		_history_server._restore_input_sender_subjects(input_subjects, tick)
 		if is_predicted:
 			input_sender._set_input(input_sender._get_predicted_input(input_sender._get_input()))
-		
+
 		input_sender.input_applied.emit(tick, is_predicted)
-		
+
 		input_sender._restore_properties()
 
 # Records our own inputs and sends them to the host. Called after every tick.
@@ -145,15 +145,15 @@ func _apply_inputs(tick: int) -> void:
 # and merging is done by InputSender, so users can customize it.
 func _record_and_send_inputs(tick: int) -> void:
 	var stamped_tick := tick + SimulatorServer._get_input_lead()
-	
+
 	if _last_recorded_tick < 0:
 		# First input, nothing to continue from
 		_record_inputs(stamped_tick)
 		return
-	
+
 	var next_tick := _last_recorded_tick + 1
 	var skipped := stamped_tick - next_tick
-	
+
 	if skipped == 0:
 		# Lead didn't change
 		_record_inputs(stamped_tick)
@@ -186,21 +186,23 @@ func _record_inputs(stamped_tick: int) -> void:
 	if _held_inputs.is_empty():
 		_record_and_send(stamped_tick)
 	else:
-		var merged_inputs : Dictionary[InputSender, Dictionary] = {}
+		# InputSender -> input Dictionary
+		var merged_inputs : Dictionary = {}
 		for input_sender in _held_inputs:
 			if is_instance_valid(input_sender):
 				merged_inputs[input_sender] = input_sender._get_merged_input(
 					_held_inputs[input_sender], input_sender._get_input())
 		_held_inputs.clear()
-		
+
 		_record_and_send_with(stamped_tick, merged_inputs)
 
 # Records and sends predicted inputs under the stamps from from_tick to
 # to_tick (exclusive). All of them are predicted from the inputs recorded under
 # the stamp before from_tick, same as the host does for missing inputs.
 func _record_predicted_inputs(from_tick: int, to_tick: int) -> void:
-	var predicted_inputs : Dictionary[InputSender, Dictionary] = {}
-	
+	# InputSender -> input Dictionary
+	var predicted_inputs : Dictionary = {}
+
 	for input_sender in _get_local_input_senders():
 		# Apply the inputs recorded under the previous stamp to read them
 		input_sender._save_properties()
@@ -208,9 +210,9 @@ func _record_predicted_inputs(from_tick: int, to_tick: int) -> void:
 			input_sender._input_properties.get_subjects(), from_tick - 1)
 		var last := input_sender._get_input()
 		input_sender._restore_properties()
-		
+
 		predicted_inputs[input_sender] = input_sender._get_predicted_input(last)
-	
+
 	for stamped_tick in range(from_tick, to_tick):
 		_record_and_send_with(stamped_tick, predicted_inputs)
 
@@ -227,14 +229,15 @@ func _hold_inputs() -> void:
 
 # Applies the given inputs, records and sends them under the given stamp, then
 # puts back the gathered inputs, so input scripts find them as they left them.
-func _record_and_send_with(stamped_tick: int, inputs: Dictionary[InputSender, Dictionary]) -> void:
-	for input_sender in inputs:
+# inputs maps InputSender -> input Dictionary.
+func _record_and_send_with(stamped_tick: int, inputs: Dictionary) -> void:
+	for input_sender: InputSender in inputs:
 		input_sender._save_properties()
-		input_sender._set_input(inputs[input_sender])
-	
+		input_sender._set_input(inputs[input_sender] as Dictionary)
+
 	_record_and_send(stamped_tick)
-	
-	for input_sender in inputs:
+
+	for input_sender: InputSender in inputs:
 		input_sender._restore_properties()
 
 func _record_and_send(stamped_tick: int) -> void:

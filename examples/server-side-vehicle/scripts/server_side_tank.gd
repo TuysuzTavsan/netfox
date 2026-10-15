@@ -47,7 +47,7 @@ func _unhandled_input(event):
 	# Dont process local inputs on other players tanks
 	if not tank_input.is_multiplayer_authority():
 		return
-	
+
 	if event.is_action_pressed("focus"):
 		if focus_camera.current:
 			focus_camera.current = false
@@ -60,23 +60,23 @@ func _unhandled_input(event):
 func _handle_movement(movement : Vector2) -> void:
 	if not is_multiplayer_authority():
 		return
-	
+
 	if movement.y != 0.0:
 		if movement.y < 0:
 			engine_force = engine_power
 		else:
 			engine_force = -engine_power
-		
+
 	else:
 		# No move input
 		engine_force = 0
-	
+
 	# Brake
 	if tank_input.brake:
 		brake = brake_force
 	else:
 		brake = 0.0
-	
+
 	# Steering
 	steering = lerp(steering, deg_to_rad(max_steering_angle) * -movement.x, steering_lerp_factor)
 
@@ -85,10 +85,10 @@ func _move_turret(mouse_input : Vector2) -> void:
 	# Return if not host.
 	if not is_multiplayer_authority():
 		return
-	
+
 	_turret_traverse -= mouse_input.x * traverse_speed
 	_turret_tilt += mouse_input.y * tilt_speed
-	
+
 	turret.basis = _turret_default_transform.basis
 	turret.basis = turret.basis.rotated(Vector3.UP, _turret_traverse)
 
@@ -99,7 +99,7 @@ func _move_turret(mouse_input : Vector2) -> void:
 func _fire(tick : int) -> void:
 	if tick - _last_fire_tick < fire_cooldown_tick:
 		return
-	
+
 	print("Firing!")
 	_last_fire_tick = tick
 	var shell := shell_scene.instantiate() as Node3D
@@ -128,7 +128,7 @@ func _merge_input(older: Dictionary, newer: Dictionary) -> Dictionary:
 func die() -> void:
 	if not is_multiplayer_authority():
 		return
-	
+
 	var player_spawner = get_parent()
 	global_position = player_spawner.get_random_spawn_point()
 	_turret_tilt = 0
@@ -140,7 +140,7 @@ func die() -> void:
 func _on_input_sender_input_applied(tick: int, is_predicted: bool) -> void:
 	_handle_movement(tank_input.movement)
 	_move_turret(tank_input.mouse_movement)
-	
+
 	# Don't fire on a guessed input. _predict_input already clears fire, this
 	# is just to be explicit.
 	if tank_input.fire and not is_predicted:

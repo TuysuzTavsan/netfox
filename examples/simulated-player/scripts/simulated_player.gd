@@ -12,11 +12,11 @@ func _simulated_tick(delta : float, _tick : int, _is_fresh : bool):
 	# Add the gravity.
 	if not is_on_floor():
 		velocity.y -= gravity * delta
-	
+
 	# Handle Jump.
 	if input.jump and is_on_floor():
 		velocity.y = JUMP_VELOCITY
-	
+
 	# Get the input direction and handle the movement/deceleration.
 	# As good practice, you should replace UI actions with custom gameplay actions.
 	var input_dir = Vector2(input.movement.x, input.movement.z)
@@ -27,7 +27,7 @@ func _simulated_tick(delta : float, _tick : int, _is_fresh : bool):
 	else:
 		velocity.x = move_toward(velocity.x, 0, SPEED * delta)
 		velocity.z = move_toward(velocity.z, 0, SPEED * delta)
-	
+
 #	print("input_jump is :%s" %input.jump)
 #	print("input_movement is :%s" %input.movement)
 #	print("velocity is :%s" %velocity)

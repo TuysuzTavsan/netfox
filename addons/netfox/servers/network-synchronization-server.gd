@@ -122,7 +122,7 @@ func deregister_sync_state(node: Node, property: NodePath) -> void:
 	_sync_state_properties.erase(node, property)
 	_sync_owned_state_properties.erase(node, property)
 
-## Register a [param property] of [param node] to be synchronized 
+## Register a [param property] of [param node] to be synchronized
 ## as input_sender input
 func register_input_sender(node: Node, property: NodePath) -> void:
 	_input_sender_properties.add(node, property)
@@ -337,35 +337,35 @@ func _synchronize_input_sender(tick: int) -> void:
 	# We don't own inputs, nothing to synchronize
 	if _input_sender_owned_properties.is_empty():
 		return
-	
+
 	var snapshots := [] as Array[_Snapshot]
 	var notified_peers := _Set.new()
-	
+
 	# By default input sender only sends input to host, check if its enabled.
 	if not _input_sender_enable_broadcast:
-		# Input broadcast is off, only send inputs to host.
-			for node in _input_sender_owned_properties.get_subjects():
-				notified_peers.add(1)
+		# Input broadcast is off, only send inputs to the host, which is
+		# always peer 1.
+		notified_peers.add(MultiplayerPeer.TARGET_PEER_SERVER)
 	else:
 		# If input broadcast is on, send inputs to everyone
 		for peer in multiplayer.get_peers():
 			notified_peers.add(peer)
-	
+
 	# Make sure to not send input to ourselves
 	# Even if host is also a player, host should be able to reach stored inputs via
 	# recorded snapshots.
 	notified_peers.erase(multiplayer.get_unique_id())
-	
+
 	# Prepare snapshot package
 	for offset in _input_sender_redundancy:
 		# Grab snapshot from NetworkHistoryServer
 		var snapshot := NetworkHistoryServer._get_input_sender_snapshot(tick - offset)
 		if not snapshot:
 			break
-		
+
 		_logger.trace("Submitting input_sender inputs: %s", [snapshot])
 		snapshots.append(snapshot)
-	
+
 	_logger.trace("Submitting input_sender inputs to peers: %s", [notified_peers])
 	for peer in notified_peers:
 		var data := _redundant_serializer.write_for(peer, snapshots, _input_sender_owned_properties)
@@ -455,14 +455,14 @@ func _ready():
 	_cmd_full_state = _command_server.register_command(_handle_full_state, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	_cmd_diff_state = _command_server.register_command(_handle_diff_state, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	_cmd_input = _command_server.register_command(_handle_input, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
-	
+
 	_cmd_input_sender = _command_server.register_command(_handle_input_sender, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
-	
+
 	# Unreliable, same as rollback state. Every packet carries its own tick, and
 	# diffs lost on the way are corrected by the next full state.
 	_cmd_full_simulator = _command_server.register_command(_handle_full_simulator, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 	_cmd_diff_simulator = _command_server.register_command(_handle_diff_simulator, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
-	
+
 	_cmd_full_sync = _command_server.register_command(_handle_full_sync, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED)
 	_cmd_diff_sync = _command_server.register_command(_handle_diff_sync, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED)
 
@@ -519,9 +519,9 @@ func _handle_diff_sync(sender: int, data: PackedByteArray):
 func _handle_input_sender(sender : int, data : PackedByteArray) -> void:
 	var buffer := StreamPeerBuffer.new()
 	buffer.data_array = data
-	
+
 	var snapshots := _redundant_serializer.read_from(sender, _input_sender_properties, buffer, true)
-	
+
 	for snapshot in snapshots:
 		# Inputs stamped too far ahead would push everyone's inputs out of the
 		# history buffers, see _SimulatorTimeTracker. Drop them before they get
@@ -531,9 +531,9 @@ func _handle_input_sender(sender : int, data : PackedByteArray) -> void:
 				"Dropping inputs from peer #%d stamped @%d, too far ahead of @%d",
 				[sender, snapshot.tick, NetworkTime.tick])
 			continue
-		
+
 		snapshot.sanitize(sender)
-		
+
 		_logger.trace("Ingesting input_sender inputs: %s", [snapshot])
 		if NetworkHistoryServer._merge_input_sender(snapshot):
 			_on_input_sender.emit(snapshot)

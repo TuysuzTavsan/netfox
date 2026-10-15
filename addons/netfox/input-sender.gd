@@ -92,22 +92,22 @@ var _logger := NetfoxLogger._for_netfox("InputSender")
 # InputSender applies state and emits signals, but this can change saved and synced
 # input properties, to prevent that, input-sender will save its pre-logic-inputs
 # and apply them whenever logic ends.
-# 
+#
 # TODO we are moving to server pattern, this might be not neccessary after that.
-var _saved_inputs_snapshot : _PropertySnapshot 
+var _saved_inputs_snapshot : _PropertySnapshot
 var _property_cache: PropertyCache
 var _property_entries: Array[PropertyEntry] = []
 
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
-	
+
 	# DANGER we dont do deferred call here, because Simulator node depends on
 	# has_authority_over_input to determine its register logic.
 	# Therefore it is needed that input-sender is registered and ready to
 	# return the result of that helper function.
 	process_settings()
-	
+
 	# Reprocess authority on connect
 	if NetworkEvents.enabled:
 		# User might change `multiplayer` - `NetworkEvents` handles that
@@ -118,22 +118,22 @@ func _ready() -> void:
 func _enter_tree() -> void:
 	if Engine.is_editor_hint():
 		return
-	
+
 	if not visibility_filter:
 		visibility_filter = PeerVisibilityFilter.new()
-	
+
 	if not visibility_filter.get_parent():
 		add_child(visibility_filter)
 
 func _exit_tree():
 	if Engine.is_editor_hint():
 		return
-	
+
 	for node in _input_properties.get_subjects():
 		NetworkSynchronizationServer.deregister(node)
 		NetworkIdentityServer.deregister_node(node)
 		NetworkHistoryServer.deregister(node)
-	
+
 	InputSenderServer._deregister_input_sender(self)
 
 ## Process settings.
@@ -142,20 +142,20 @@ func _exit_tree():
 ## ( calls process_authority ).
 func process_settings() -> void:
 	process_authority()
-	
+
 	_property_cache = PropertyCache.new(root)
 	_property_entries.clear()
-	
+
 	_saved_inputs_snapshot = _PropertySnapshot.new()
-	
+
 	for property in input_properties:
 		var property_entry = _property_cache.get_entry(property)
 		_property_entries.push_back(property_entry)
-	
+
 	# Register identifiers
 	for node in _input_properties.get_subjects():
 		NetworkIdentityServer.register_node(node)
-	
+
 	# Register visibility filter
 	for node in _input_properties.get_subjects():
 		NetworkSynchronizationServer.register_visibility_filter(node, visibility_filter)
@@ -166,21 +166,21 @@ func process_settings() -> void:
 ## Make sure to do this at the same time on all peers.
 func process_authority():
 	InputSenderServer._deregister_input_sender(self)
-	
+
 	for node in _input_properties.get_subjects():
 		for property in _input_properties.get_properties_of(node):
 			NetworkHistoryServer.deregister_input_sender(node, property)
 			NetworkSynchronizationServer.deregister_input_sender(node, property)
-	
+
 	# Process authority
 	_input_properties.set_from_paths(root, input_properties)
-	
+
 	# Register new recorded inputs
 	for node in _input_properties.get_subjects():
 		for property in _input_properties.get_properties_of(node):
 			NetworkHistoryServer.register_input_sender(node, property)
 			NetworkSynchronizationServer.register_input_sender(node, property)
-	
+
 	InputSenderServer._register_input_sender(self)
 
 ## Add an input property.
@@ -192,7 +192,7 @@ func add_input(node: Variant, property: String) -> void:
 	var property_path := PropertyEntry.make_path(root, node, property)
 	if not property_path or input_properties.has(property_path):
 		return
-	
+
 	input_properties.push_back(property_path)
 	_properties_dirty = true
 	_reprocess_settings.call_deferred()
@@ -253,24 +253,17 @@ func clear_schema() -> void:
 ## TODO make sure to document this responsibility to developer.
 func has_authority_over_input_nodes() -> bool:
 	for subject in _input_properties.get_subjects():
-		
+
 		# ObjectPool does not guarentee every subject is node.
 		if not subject is Node:
 			continue
-		
+
 		# Found input node, check if it has authority
 		if subject.is_multiplayer_authority():
 			return true
-	
+
 	# Did not find any node, or none of them has authority.
 	return false
-
-## Get latest input data available for this [InputSender].
-## Used by [Simulator] node internally.
-func get_latest_received_information_tick(current_tick : int) -> int:
-	return NetworkHistoryServer.get_latest_input_sender_for(
-		_input_properties.get_subjects(),
-		current_tick)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_EDITOR_PRE_SAVE:
@@ -284,27 +277,27 @@ func _notification(what: int) -> void:
 func _get_configuration_warnings() -> PackedStringArray:
 	if not root:
 		root = get_parent()
-	
+
 	# Check if root exists.
 	if not root:
 		return ["No valid root node found!"]
-	
+
 	var result := PackedStringArray()
-	
+
 	result.append_array(_NetfoxEditorUtils.gather_properties(root, "_get_input_sender_input_properties",
 		func(node, prop):
 			add_input(node, prop)
 	))
-	
+
 	if _input_properties.is_empty() and input_properties.is_empty():
 		return ["Input properties are not configured!"]
-	
+
 	return result
 
 func _reprocess_settings() -> void:
 	if not _properties_dirty or Engine.is_editor_hint():
 		return
-	
+
 	_properties_dirty = false
 	process_settings()
 
@@ -325,26 +318,32 @@ func _set_input(input: Dictionary) -> void:
 func _get_predicted_input(last: Dictionary) -> Dictionary:
 	if not root or not root.has_method("_predict_input"):
 		return last.duplicate()
-	
+
 	var predicted: Variant = root.call("_predict_input", last.duplicate())
 	if not predicted is Dictionary:
 		_logger.error("_predict_input() of %s must return a Dictionary, copying the last input instead", [root.name])
 		return last.duplicate()
-	
-	return last.merged(predicted as Dictionary, true)
+
+	# Properties missing from the result keep the last value
+	var result := last.duplicate()
+	result.merge(predicted as Dictionary, true)
+	return result
 
 # Returns a single input made from two inputs, using the root node's
 # _merge_input() if it has one, see the class description.
 func _get_merged_input(older: Dictionary, newer: Dictionary) -> Dictionary:
 	if not root or not root.has_method("_merge_input"):
 		return newer.duplicate()
-	
+
 	var merged: Variant = root.call("_merge_input", older.duplicate(), newer.duplicate())
 	if not merged is Dictionary:
 		_logger.error("_merge_input() of %s must return a Dictionary, keeping the newer input instead", [root.name])
 		return newer.duplicate()
-	
-	return newer.merged(merged as Dictionary, true)
+
+	# Properties missing from the result keep the newer value
+	var result := newer.duplicate()
+	result.merge(merged as Dictionary, true)
+	return result
 
 # Helper function to save current input_properties.
 # Used internally by InputSenderServer/SimulatorServer to record state before
@@ -354,6 +353,6 @@ func _save_properties() -> void:
 
 # Helper function to restore input_properties.
 # Used internally by InputSenderServer/SimulatorServer to restore state after
-# overwriting properties. 
+# overwriting properties.
 func _restore_properties() -> void:
 	_saved_inputs_snapshot.apply(_property_cache)
