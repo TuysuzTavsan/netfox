@@ -210,14 +210,18 @@ var SETTINGS: Array[Dictionary] = [
 		"type" : TYPE_INT
 	},
 	{
-		"name": "netfox/simulator/host_delay_ticks",
-		"value": 8,
-		"type" : TYPE_INT
-	},
-	{
 		"name": "netfox/simulator/max_view_delay_ticks",
 		"value": 30,
 		"type" : TYPE_INT
+	},
+	{
+		# Clients stamp their inputs ahead by rtt / 2 + jitter + this margin,
+		# in seconds, so inputs arrive at the host before they're needed
+		"name": "netfox/simulator/input_lead_margin",
+		"value": 0.1,
+		"type": TYPE_FLOAT,
+		"hint": PROPERTY_HINT_RANGE,
+		"hint_string": "0,1,or_greater"
 	},
 	{
 		# Seconds between periodic view delay samples sent by clients

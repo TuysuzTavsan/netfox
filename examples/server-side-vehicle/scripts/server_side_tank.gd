@@ -107,6 +107,23 @@ func _fire(tick : int) -> void:
 	shell.global_transform = shell_spawn_point.global_transform
 	shell.firing_tank = self
 
+# Called by InputSender when an input has to be predicted, see InputSender.
+# Firing only lasts a single tick, and mouse movement is a per tick delta, so
+# repeating them would fire and turn twice.
+func _predict_input(last: Dictionary) -> Dictionary:
+	var predicted := last.duplicate()
+	predicted["TankInput:fire"] = false
+	predicted["TankInput:mouse_movement"] = Vector2.ZERO
+	return predicted
+
+# Called by InputSender when two inputs have to be merged into one, see
+# InputSender. Keep a shot from either input, and add up mouse movement.
+func _merge_input(older: Dictionary, newer: Dictionary) -> Dictionary:
+	var merged := newer.duplicate()
+	merged["TankInput:fire"] = older["TankInput:fire"] or newer["TankInput:fire"]
+	merged["TankInput:mouse_movement"] = older["TankInput:mouse_movement"] + newer["TankInput:mouse_movement"]
+	return merged
+
 # Called only on server.
 func die() -> void:
 	if not is_multiplayer_authority():

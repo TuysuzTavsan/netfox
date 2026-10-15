@@ -614,7 +614,10 @@ func _after_tick_loop() -> void:
 
 	# Restore state for Simulator before emitting after_tick_loop so that
 	# listeners can run logic after state is set.
-	NetworkHistoryServer._restore_simulator(tick)
+	# Local authoritative simulators are predicted up to tick + input lead, so
+	# restore up to there. Other subjects only have states received from the
+	# host, which are never newer than tick, so this changes nothing for them.
+	NetworkHistoryServer._restore_simulator(tick + SimulatorServer._get_input_lead())
 
 	# Emit signal
 	after_tick_loop.emit()

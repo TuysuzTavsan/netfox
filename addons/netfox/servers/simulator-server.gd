@@ -11,6 +11,11 @@ class_name _SimulatorServer
 
 ## Insight
 ##
+## Time model: the host's tick is the truth. The host simulates everyone, its
+## own player and remote players, at its current tick, using the inputs of the
+## previous tick. Clients stamp their inputs ahead of their own tick (input
+## lead), so the inputs arrive before the host needs them. Clients predict
+## their own player up to tick + input lead. See [_SimulatorTimeTracker].
 ##
 ## Depending on simulator authority there are 4 options we can operate on:
 ##
@@ -26,15 +31,16 @@ class_name _SimulatorServer
 ## - Broadcast it togather with 2.
 ##
 ## 2- local authoritative simulator:
-## - We have inputs available locally up to tick -1.
+## - We have inputs available locally up to tick + input lead - 1.
 ## (input-sender inputs are recorded on after tick).
 ## - Apply the latest authoritative state received from host. (the truth)
-## - Iterate over inputs and reach the current tick - 1.
+## - Iterate over inputs and reach tick + input lead.
 ##
 ## 3- host puppet.
-## - If we dont have inputs buffered yet, dont run the simulation, simply skip.
-## - If we have inputs buffered, run the simulation with indexed inputs for 1 simulation tick.
-## - Record the simulator state for given simulation tick.
+## - Run the simulation for the current tick, with the inputs of tick - 1.
+## Clients stamp inputs ahead, so they are usually here already.
+## - If inputs are missing, predict them, see InputSender.
+## - Record the simulator state for the current tick.
 ## - Broadcast them.
 ##
 ## 4- client puppet.
@@ -52,9 +58,6 @@ var _logger := NetfoxLogger._for_netfox("SimulatorServer")
 # History size for simulation.
 var _simulation_history_size : int = ProjectSettings.get_setting("netfox/simulator/history_limit", 64)
 
-# Host side buffering/delay tick count for simulation.
-var _simulation_host_delay_ticks : int = ProjectSettings.get_setting("netfox/simulator/host_delay_ticks", 8)
-
 # Maximum view delay accepted from clients, in ticks. Limits how far into the
 # past a client can rewind when firing, see register_projectile.
 var _max_view_delay_ticks : int = ProjectSettings.get_setting("netfox/simulator/max_view_delay_ticks", 30)
@@ -68,9 +71,9 @@ var _living_projectiles : Array[Node] = []
 # Helper to record and restore simulation aware collision-shapes/areas.
 var _simulated_collision_recorder : _SimulatedCollisionRecorder = _SimulatedCollisionRecorder.new()
 
-# Helper to track how many ticks behind each client sees the host's simulation.
-# Used to find the tick a projectile was fired at, see register_projectile.
-var _view_delay_tracker : _ViewDelayTracker = _ViewDelayTracker.new()
+# Helper to track how each client's time relates to the host's: input lead and
+# view delay. See _SimulatorTimeTracker.
+var _time_tracker : _SimulatorTimeTracker = _SimulatorTimeTracker.new()
 
 # Fresh registered projectiles.
 # Mapped by tick -> array of projectiles (type of Node) that are estimated to be fired on mapped tick.
@@ -94,7 +97,7 @@ func _ready():
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
 	
 	_simulated_collision_recorder.initialize(get_tree())
-	_view_delay_tracker.initialize(self, NetworkCommandServer, _synchronization_server, _simulation_history_size)
+	_time_tracker.initialize(self, NetworkCommandServer, _synchronization_server, _simulation_history_size)
 
 # Register a simulator node.
 # Will check for authority over inputs and categorize by it.
@@ -129,7 +132,7 @@ func deregister_simulator(simulator : Simulator) -> void:
 ## the host's current tick.
 ## [br][br]
 ## The projectile is caught up from the tick of the host's simulation that the
-## firing peer was seeing at [param fired_tick], see [_ViewDelayTracker]. The
+## firing peer was seeing at [param fired_tick], see [_SimulatorTimeTracker]. The
 ## rewind is limited by [code]netfox/simulator/max_view_delay_ticks[/code].
 func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : int) -> void:
 	
@@ -174,23 +177,26 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 # Returns how many ticks behind the given peer saw the host's simulation at
 # the given tick of the peer.
 func _get_view_delay_for(peer: int, tick: int) -> int:
-	# The host sees other players where it simulates them, host_delay_ticks
-	# behind. This also covers offline play.
+	# The host sees everyone at its current tick, nothing to rewind.
+	# This also covers offline play.
 	if peer == multiplayer.get_unique_id():
-		return _simulation_host_delay_ticks
+		return 0
 	
-	var view_delay := _view_delay_tracker.get_view_delay(peer, tick, -1)
+	var view_delay := _time_tracker.get_view_delay(peer, tick, -1)
 	if view_delay < 0:
-		# No sample for this tick, e.g. the peer just connected. It can't see
-		# the host's simulation any sooner than the host simulates it.
-		_logger.debug("No view delay from peer #%s @%d, using host delay", [peer, tick])
-		return _simulation_host_delay_ticks
+		# No sample for this tick, e.g. the peer just connected. Without a
+		# sample, don't rewind at all.
+		_logger.debug("No view delay from peer #%s @%d, not rewinding", [peer, tick])
+		return 0
 	
 	# The view delay is reported by the client, so don't trust it blindly.
-	# It can't be less than host_delay_ticks, and can't rewind further than
-	# max_view_delay_ticks.
-	var max_view_delay := maxi(_simulation_host_delay_ticks, _max_view_delay_ticks)
-	return clampi(view_delay, _simulation_host_delay_ticks, max_view_delay)
+	# It can't rewind further than max_view_delay_ticks.
+	return clampi(view_delay, 0, maxi(0, _max_view_delay_ticks))
+
+# Returns how many ticks ahead we stamp our inputs. Always 0 on the host.
+# Used by InputSenderServer and NetworkTime internally.
+func _get_input_lead() -> int:
+	return _time_tracker.get_input_lead()
 
 func _after_tick(tick : int) -> void:
 	
@@ -202,12 +208,13 @@ func _after_tick(tick : int) -> void:
 	
 	_step_living_projectiles(tick)
 	
-	if NetworkTime.tick - _simulation_host_delay_ticks >= 0:
-		# History server only records owned simulator state properties.
-		_history_server._record_simulator(NetworkTime.tick - _simulation_host_delay_ticks)
-		_synchronization_server._synchronize_simulator(NetworkTime.tick - _simulation_host_delay_ticks)
-		
-		_simulated_collision_recorder.record_tick(NetworkTime.tick - _simulation_host_delay_ticks)
+	# Everything was simulated at the current tick, so everything is recorded
+	# and sent under the current tick.
+	# History server only records owned simulator state properties.
+	_history_server._record_simulator(tick)
+	_synchronization_server._synchronize_simulator(tick)
+	
+	_simulated_collision_recorder.record_tick(tick)
 	
 	# Trim old history that we dont need.
 	var trim_tick := tick - _simulation_history_size
@@ -250,6 +257,10 @@ func _handle_host_simulators() -> void:
 func _handle_local_authoritative_simulators() -> void:
 	var current_tick := NetworkTime.tick
 	
+	# Our inputs are stamped this far ahead, so we predict this far ahead too.
+	# Our own player is shown at current_tick + input_lead.
+	var predicted_tick := current_tick + _get_input_lead()
+	
 	for simulator in _local_authoritative_simulators:
 		
 		var input_subjects := simulator.listened_input_sender._input_properties.get_subjects()
@@ -271,12 +282,12 @@ func _handle_local_authoritative_simulators() -> void:
 			)
 			
 			# Apply inputs of the previous tick.
-			_history_server._restore_input_sender_subjects(input_subjects, current_tick - 1)
+			_history_server._restore_input_sender_subjects(input_subjects, predicted_tick - 1)
 			
-			var is_fresh := _is_tick_fresh_for(simulator, current_tick)
-			simulator._run_simulation(NetworkTime.ticktime, current_tick, is_fresh)
-			_history_server._record_simulator_subjects(state_subjects, current_tick)
-			_set_tick_simulated_for(simulator, current_tick)
+			var is_fresh := _is_tick_fresh_for(simulator, predicted_tick)
+			simulator._run_simulation(NetworkTime.ticktime, predicted_tick, is_fresh)
+			_history_server._record_simulator_subjects(state_subjects, predicted_tick)
+			_set_tick_simulated_for(simulator, predicted_tick)
 			
 			# Restore messed up properties.
 			simulator.listened_input_sender._restore_properties()
@@ -285,7 +296,7 @@ func _handle_local_authoritative_simulators() -> void:
 		# Apply truth from history, which has diffs merged into full state.
 		_history_server._restore_simulator_subjects(state_subjects, latest_truth_tick)
 		
-		for i in range(latest_truth_tick + 1, current_tick + 1):
+		for i in range(latest_truth_tick + 1, predicted_tick + 1):
 			# Apply inputs of the previous tick. If there's no input recorded
 			# for it, the latest input before it is applied.
 			_history_server._restore_input_sender_subjects(input_subjects, i - 1)
@@ -299,14 +310,15 @@ func _handle_local_authoritative_simulators() -> void:
 		simulator.listened_input_sender._restore_properties()
 
 ## 3- host puppet.
-## - If we dont have inputs buffered yet, dont run the simulation, simply skip.
-## - If we have inputs buffered, run the simulation with indexed inputs for 1 simulation tick.
-## - Record the simulator state for given simulation tick.
+## - Run the simulation for the current tick, with the inputs of tick - 1.
+## - If inputs are missing, predict them, see InputSender.
+## - Record the simulator state for the current tick.
 ## - Broadcast them.
 func _handle_host_puppet_simulators() -> void:
 	var current_tick := NetworkTime.tick
 	
-	var simulated_tick := current_tick - _simulation_host_delay_ticks
+	# Host puppets are simulated at the current tick, like everything else.
+	var simulated_tick := current_tick
 	
 	# Simulating a tick uses the inputs of the tick before it, so the first
 	# tick with any inputs to simulate is 1. Before that, simulated_tick - 1 is
@@ -337,10 +349,15 @@ func _handle_host_puppet_simulators() -> void:
 			simulator._run_simulation(NetworkTime.ticktime, simulated_tick, is_fresh)
 			
 		else:
-			# We need to predict this frame.
-			_logger.warning("No buffered input found, predicting inputs.")
+			# The input didn't arrive in time, predict it from the latest one we
+			# have. Same as a client filling a skipped stamp, see InputSender.
+			_logger.debug("No input for @%d, predicting it", [simulated_tick - 1])
 			
-			simulator.listened_input_sender.predict_inputs()
+			var input_sender := simulator.listened_input_sender
+			_history_server._restore_input_sender_subjects(
+				input_sender._input_properties.get_subjects(), simulated_tick - 1)
+			input_sender._set_input(input_sender._get_predicted_input(input_sender._get_input()))
+			
 			simulator._run_simulation(NetworkTime.ticktime, simulated_tick, is_fresh)
 		
 		_set_tick_simulated_for(simulator, simulated_tick)
@@ -348,7 +365,7 @@ func _handle_host_puppet_simulators() -> void:
 # Steps every already-caught-up living projectile by a single tick.
 # No need to restore world state for living projectiles.
 func _step_living_projectiles(current_tick: int) -> void:
-	var simulated_tick := current_tick - _simulation_host_delay_ticks
+	var simulated_tick := current_tick
 	
 	# Iterate in reverse because we are also removing.
 	var i := _living_projectiles.size() - 1
@@ -371,12 +388,12 @@ func _step_living_projectiles(current_tick: int) -> void:
 		
 		i -= 1
 
-# Steps the freshly registered projectiles up to current_tick - _simulation_host_delay_ticks (not included).
+# Steps the freshly registered projectiles up to current_tick (not included).
 func _catch_up_fresh_projectiles(current_tick: int) -> void:
 	if _fresh_registered_projectiles_by_tick.is_empty():
 		return
 	
-	var simulated_tick := current_tick - _simulation_host_delay_ticks
+	var simulated_tick := current_tick
 	var oldest_tick : int = _fresh_registered_projectiles_by_tick.keys().min()
 	
 	# Ensure oldest tick is not older than our history window.

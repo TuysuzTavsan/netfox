@@ -8,6 +8,40 @@ class_name InputSender
 ## [InputSender] is a multi purpose node to use on networked games,
 ## It provides signals to code host and client side logic.
 ## [InputSender] signals are tied and emitted on [signal NetworkTime.on_tick].
+## [br][br]
+## [b]Predicting and merging inputs[/b]: inputs are gathered once per tick,
+## the same way as for rollback. Sometimes netfox needs an input that was never
+## gathered, or has to fit two gathered inputs into one tick:
+## [br]- [b]predict[/b]: an input is needed for a tick, but there is none. This
+## happens when a client's input lead grows and a stamp is skipped, and when
+## the host simulates a player whose input didn't arrive in time.
+## [br]- [b]merge[/b]: two inputs get the same stamp. This happens when a
+## client's input lead shrinks.
+## [br]Both are rare, see [_SimulatorTimeTracker]. By default, predicting
+## copies the last input, and merging keeps the newer input. If the defaults
+## don't fit, implement these methods in the [member root] node's script:
+## [codeblock]
+## # Return the input for a tick that has none. last is the latest input
+## # before it. May be called for multiple ticks in a row with the same last.
+## func _predict_input(last: Dictionary) -> Dictionary:
+##     var predicted := last.duplicate()
+##     predicted["Input:jump"] = false
+##     return predicted
+##
+## # Return a single input made from two inputs that got the same tick.
+## # older was gathered one tick before newer.
+## func _merge_input(older: Dictionary, newer: Dictionary) -> Dictionary:
+##     var merged := newer.duplicate()
+##     merged["Input:jump"] = older["Input:jump"] or newer["Input:jump"]
+##     return merged
+## [/codeblock]
+## Inputs are dictionaries, with the paths in [member input_properties] as keys,
+## and the input values as values. Properties missing from the returned
+## dictionary keep the value from [code]last[/code] or [code]newer[/code].
+## [br][br]
+## For example, inputs that are only true for a single tick, like a jump press,
+## are copied by default when predicting, and the press happens twice. When
+## merging, the default drops the older press.
 ## 
 ## @experimental:
 ## InputSenderServer assumes input snapshots arrive as whole. (atomic), if snapshot
@@ -303,9 +337,43 @@ func _apply_snapshot_for_self(snapshot : _Snapshot) -> void:
 				# TODO is this should be node.set_indexed ??
 				subject.set_indexed(property, value)
 
-## Predicts inputs for given tick.
-func predict_inputs() -> void:
-	pass
+# Returns the current input, see "Predicting and merging inputs" in the class
+# description.
+func _get_input() -> Dictionary:
+	return _PropertySnapshot.extract(_property_entries).as_dictionary()
+
+# Applies the given input. Properties missing from it are left unchanged.
+func _set_input(input: Dictionary) -> void:
+	for property_entry in _property_entries:
+		var path := property_entry.to_string()
+		if input.has(path):
+			property_entry.set_value(input[path])
+
+# Returns the predicted input for a tick that has none, using the root node's
+# _predict_input() if it has one, see the class description.
+func _get_predicted_input(last: Dictionary) -> Dictionary:
+	if not root or not root.has_method("_predict_input"):
+		return last.duplicate()
+	
+	var predicted: Variant = root.call("_predict_input", last.duplicate())
+	if not predicted is Dictionary:
+		_logger.error("_predict_input() of %s must return a Dictionary, copying the last input instead", [root.name])
+		return last.duplicate()
+	
+	return last.merged(predicted as Dictionary, true)
+
+# Returns a single input made from two inputs, using the root node's
+# _merge_input() if it has one, see the class description.
+func _get_merged_input(older: Dictionary, newer: Dictionary) -> Dictionary:
+	if not root or not root.has_method("_merge_input"):
+		return newer.duplicate()
+	
+	var merged: Variant = root.call("_merge_input", older.duplicate(), newer.duplicate())
+	if not merged is Dictionary:
+		_logger.error("_merge_input() of %s must return a Dictionary, keeping the newer input instead", [root.name])
+		return newer.duplicate()
+	
+	return newer.merged(merged as Dictionary, true)
 
 # Helper function to save current input_properties.
 # Used internally by InputSenderServer/SimulatorServer to record state before
