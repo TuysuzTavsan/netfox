@@ -22,8 +22,14 @@ var _simulator_properties := _PropertyPool.new()
 
 var _rb_history_size := NetworkRollback.history_limit
 var _sync_history_size := ProjectSettings.get_setting("netfox/state_synchronizer/history_limit", 64) as int
-var _input_sender_history_size := ProjectSettings.get_setting("netfox/input_sender/history_limit", 64) as int
-var _simulator_history_size := ProjectSettings.get_setting("netfox/simulator/history_limit", 64) as int
+# InputSender and Simulator histories also hold ticks in the future: clients
+# stamp inputs ahead and predict their own state ahead. So their buffers are
+# history_limit ticks of the past, plus room for the future, see
+# _SimulatorTimeTracker.get_future_history_ticks().
+var _input_sender_history_size := ProjectSettings.get_setting("netfox/input_sender/history_limit", 64) as int \
+	+ _SimulatorTimeTracker.get_future_history_ticks()
+var _simulator_history_size := ProjectSettings.get_setting("netfox/simulator/history_limit", 64) as int \
+	+ _SimulatorTimeTracker.get_future_history_ticks()
 
 var _ignored_subjects := _Set.new()
 

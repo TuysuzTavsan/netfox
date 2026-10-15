@@ -172,27 +172,36 @@ var SETTINGS: Array[Dictionary] = [
 	},
 	# Input Sender
 	{
+		# Each input packet also carries this many previous inputs, in case
+		# some packets are lost
 		"name": "netfox/input_sender/input_redundancy",
 		"value": 3,
 		"type" : TYPE_INT
 	},
 	{
+		# Ticks of past inputs kept. The buffers also get room for inputs
+		# stamped ahead, see netfox/simulator/max_input_lead
 		"name": "netfox/input_sender/history_limit",
 		"value": 64,
 		"type" : TYPE_INT
 	},
 	{
+		# Ticks the host waits for an input before considering it missing.
+		# Must be smaller than netfox/input_sender/history_limit
 		"name": "netfox/input_sender/missing_input_history",
 		"value": 16,
 		"type" : TYPE_INT
 	},
 	{
+		# Send inputs to every peer, not only the host
 		"name": "netfox/input_sender/enable_input_broadcast",
 		"value": false,
 		"type" : TYPE_BOOL
 	},
 	# Simulator
 	{
+		# Ticks between full states, diff states are sent in between.
+		# 0 sends a full state every tick
 		"name": "netfox/simulator/full_state_interval",
 		"value": 24,
 		"type": TYPE_INT,
@@ -200,16 +209,21 @@ var SETTINGS: Array[Dictionary] = [
 		"hint_string": "0,60,or_greater"
 	},
 	{
+		# Send only what changed since the previous tick between full states
 		"name": "netfox/simulator/enable_diff_states",
 		"value": true,
 		"type": TYPE_BOOL
 	},
 	{
+		# Ticks of past simulator state kept, also how far back projectiles
+		# can be caught up. The buffers also get room for states predicted
+		# ahead, see netfox/simulator/max_input_lead
 		"name": "netfox/simulator/history_limit",
 		"value": 64,
 		"type" : TYPE_INT
 	},
 	{
+		# Most ticks the host rewinds when catching up a client's projectile
 		"name": "netfox/simulator/max_view_delay_ticks",
 		"value": 30,
 		"type" : TYPE_INT
@@ -222,6 +236,17 @@ var SETTINGS: Array[Dictionary] = [
 		"type": TYPE_FLOAT,
 		"hint": PROPERTY_HINT_RANGE,
 		"hint_string": "0,1,or_greater"
+	},
+	{
+		# Clients never stamp their inputs further ahead than this, in seconds.
+		# The host drops inputs stamped further ahead. InputSender and
+		# Simulator history buffers get this much room for the future, on top
+		# of their history_limit
+		"name": "netfox/simulator/max_input_lead",
+		"value": 1.0,
+		"type": TYPE_FLOAT,
+		"hint": PROPERTY_HINT_RANGE,
+		"hint_string": "0,2,or_greater"
 	},
 	{
 		# Seconds between periodic view delay samples sent by clients

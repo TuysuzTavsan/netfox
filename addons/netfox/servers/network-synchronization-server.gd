@@ -523,6 +523,15 @@ func _handle_input_sender(sender : int, data : PackedByteArray) -> void:
 	var snapshots := _redundant_serializer.read_from(sender, _input_sender_properties, buffer, true)
 	
 	for snapshot in snapshots:
+		# Inputs stamped too far ahead would push everyone's inputs out of the
+		# history buffers, see _SimulatorTimeTracker. Drop them before they get
+		# there.
+		if not SimulatorServer._is_input_tick_accepted(snapshot.tick):
+			_logger.warning(
+				"Dropping inputs from peer #%d stamped @%d, too far ahead of @%d",
+				[sender, snapshot.tick, NetworkTime.tick])
+			continue
+		
 		snapshot.sanitize(sender)
 		
 		_logger.trace("Ingesting input_sender inputs: %s", [snapshot])

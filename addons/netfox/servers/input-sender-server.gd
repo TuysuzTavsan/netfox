@@ -44,6 +44,15 @@ func _ready():
 	if not _history_server: _history_server = NetworkHistoryServer
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
 	
+	# Missing inputs are looked up missing_input_history ticks back, so they
+	# have to be inside the history_limit ticks of the past that are kept.
+	if _missing_inputs_history_size >= _input_sender_history_size:
+		_logger.warning(
+			"netfox/input_sender/missing_input_history (%d) must be smaller than " +
+			"netfox/input_sender/history_limit (%d), using %d",
+			[_missing_inputs_history_size, _input_sender_history_size, _input_sender_history_size - 1])
+		_missing_inputs_history_size = maxi(0, _input_sender_history_size - 1)
+	
 	# Record inputs similiar to rollback so that users can use same methods
 	# on their input scripts.
 	# For good reasons, We do logic and run InputSender signals on NetworkTime.on_tick

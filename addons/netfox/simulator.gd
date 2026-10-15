@@ -38,6 +38,21 @@ class_name Simulator
 ## their future inputs. [br][br]
 ##
 ## TODO: Simulator can have option to predict if input_broadcast is on for inputsender. [br]
+## [br]
+## [b]Ticks[/b]: simulating works the same way as rollback. For tick T, the
+## inputs of tick T are applied, then [code]_simulated_tick(delta, T, is_fresh)[/code]
+## is called, and the resulting state is recorded as the state of tick T + 1:
+## [codeblock]
+## func _simulated_tick(delta: float, tick: int, is_fresh: bool) -> void:
+##     # Inputs of tick are applied here, the state you leave behind
+##     # is the state of tick + 1
+##     velocity = input.movement * speed
+##     move_and_slide()
+## [/codeblock]
+## [code]is_fresh[/code] is true the first time a tick is simulated. Local
+## authoritative peers simulate the same tick again after receiving the truth
+## from the host, with [code]is_fresh[/code] false, so use it for effects like
+## sounds that should play once.
 
 ## The root node for resolving node paths in properties. Defaults to the parent node.
 @export var root: Node = get_parent()
