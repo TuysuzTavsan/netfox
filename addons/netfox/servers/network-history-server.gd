@@ -425,12 +425,12 @@ func _record(tick: int, history: _PerObjectHistory, snapshots: _HistoryBuffer, p
 #		return not subject.is_multiplayer_authority()
 func _restore_latest(tick: int, history: _PerObjectHistory, filter: Callable = Callable()) -> bool:
 	var any_applied := false
-  
-for subject in history.subjects_raw():
+
+	for subject in history.subjects_raw():
 		# Optional filter. example: to only restore subjects we dont have authority over.
 		if filter.is_valid() and not filter.call(subject):
 			continue
-      
+  
 		# Grab latest snapshot up to tick
 		var snapshot := history.get_latest_snapshot(tick, subject)
 
