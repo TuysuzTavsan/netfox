@@ -55,6 +55,10 @@ var _simulation_history_size : int = ProjectSettings.get_setting("netfox/simulat
 # Host side buffering/delay tick count for simulation.
 var _simulation_host_delay_ticks : int = ProjectSettings.get_setting("netfox/simulator/host_delay_ticks", 8)
 
+# Maximum view delay accepted from clients, in ticks. Limits how far into the
+# past a client can rewind when firing, see register_projectile.
+var _max_view_delay_ticks : int = ProjectSettings.get_setting("netfox/simulator/max_view_delay_ticks", 30)
+
 # Node to array of ticks
 var _simulated_ticks := {}
 
@@ -63,6 +67,10 @@ var _living_projectiles : Array[Node] = []
 
 # Helper to record and restore simulation aware collision-shapes/areas.
 var _simulated_collision_recorder : _SimulatedCollisionRecorder = _SimulatedCollisionRecorder.new()
+
+# Helper to track how many ticks behind each client sees the host's simulation.
+# Used to find the tick a projectile was fired at, see register_projectile.
+var _view_delay_tracker : _ViewDelayTracker = _ViewDelayTracker.new()
 
 # Fresh registered projectiles.
 # Mapped by tick -> array of projectiles (type of Node) that are estimated to be fired on mapped tick.
@@ -86,6 +94,7 @@ func _ready():
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
 	
 	_simulated_collision_recorder.initialize(get_tree())
+	_view_delay_tracker.initialize(self, NetworkCommandServer, _synchronization_server, _simulation_history_size)
 
 # Register a simulator node.
 # Will check for authority over inputs and categorize by it.
@@ -114,6 +123,14 @@ func deregister_simulator(simulator : Simulator) -> void:
 
 ## Register a projectile to be stepped by simulation.
 ## This method should only be called on host.
+## [br][br]
+## [param fired_tick] is the firing peer's tick when it fired, e.g. the tick of
+## its fire input, as given by [signal InputSender.network_input]. Don't pass
+## the host's current tick.
+## [br][br]
+## The projectile is caught up from the tick of the host's simulation that the
+## firing peer was seeing at [param fired_tick], see [_ViewDelayTracker]. The
+## rewind is limited by [code]netfox/simulator/max_view_delay_ticks[/code].
 func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : int) -> void:
 	
 	var has_step_method := projectile.has_method("step")
@@ -126,68 +143,54 @@ func register_projectile(projectile : Node, firing_peer_id : int, fired_tick : i
 		)
 		return
 	
-	## Only allow Offline peer and ENet peer to register, because only Enet has rtt statistic functions.
-	## Offline is for convenience.
-	var enet_peer := multiplayer.multiplayer_peer
-	if enet_peer is not ENetMultiplayerPeer and enet_peer is not OfflineMultiplayerPeer:
-		_logger.error(
-			"Error registering projectile %s : Multiplayer peer is either null or not type of ENet.\n" +
-			"Only ENetMultiplayerPeer is supported for now.", [projectile.name]
-		)
-		return
-	
-	var firing_peer : ENetPacketPeer = null
-	
-	if enet_peer is ENetMultiplayerPeer:
-		firing_peer = enet_peer.get_peer(firing_peer_id) as ENetPacketPeer
-	
-	# Allow valid peers only with the exception being server id.
-	# OfflinePeer will return id 1 so should be fine.
-	if not firing_peer and firing_peer_id != 1:
-		_logger.error(
-			"Error registering projectile %s: Firing peer #%s is not found on active peers.",
-			[projectile.name, firing_peer_id]
-		)
-		return
-	
-	var rtt_ms := 0.0
-	var half_rtt_sec := 0.0
-	var half_rtt_ticks := 0.0
-	var estimated_firing_tick := fired_tick - _simulation_host_delay_ticks
-	
-	# If firing peer is valid get stats and estimate peers simulation tick.
-	if firing_peer:
-		rtt_ms = firing_peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
-		half_rtt_sec = (rtt_ms * 0.5) / 1000.0
-		half_rtt_ticks = half_rtt_sec / NetworkTime.ticktime
-		
-		# Dont forget that we synchronize current_tick - _simulation_host_delay_ticks
-		estimated_firing_tick = fired_tick - roundi(half_rtt_ticks) - _simulation_host_delay_ticks
+	var view_delay := _get_view_delay_for(firing_peer_id, fired_tick)
+	var estimated_firing_tick := fired_tick - view_delay
 	
 	if estimated_firing_tick < 0:
 		_logger.error(
 			"Error registering projectile %s: Calculated estimated_firing_tick as negative. Not registering.\n" +
-			"half rtt: %s, fired tick: %s, estimated firing tick: %s",
-			[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick]
+			"view delay: %s, fired tick: %s, estimated firing tick: %s",
+			[projectile.name, view_delay, fired_tick, estimated_firing_tick]
 		)
 		return
 	
 	if estimated_firing_tick < NetworkTime.tick - _simulation_history_size:
 		_logger.error(
 			"Error registering projectile %s: Calculated estimated_firing_tick is older than history.\n" +
-			"Returning without registering. half rtt: %s, fired tick: %s, estimated firing tick: %s",
-			[projectile.name, half_rtt_sec, fired_tick, estimated_firing_tick]
+			"Returning without registering. view delay: %s, fired tick: %s, estimated firing tick: %s",
+			[projectile.name, view_delay, fired_tick, estimated_firing_tick]
 		)
 		return
 	
 	_logger.debug(
 		"Registered projectile %s with stats:\n" +
-		"firing_peer: %s, fired tick: %s, half rtt: %s, estimated firing tick: %s",
-		[projectile.name, firing_peer_id, fired_tick, half_rtt_sec, estimated_firing_tick]
+		"firing_peer: %s, fired tick: %s, view delay: %s, estimated firing tick: %s",
+		[projectile.name, firing_peer_id, fired_tick, view_delay, estimated_firing_tick]
 	)
 	
 	var existing_projectile_arr := _fresh_registered_projectiles_by_tick.get_or_add(estimated_firing_tick, []) as Array
 	existing_projectile_arr.push_back(projectile)
+
+# Returns how many ticks behind the given peer saw the host's simulation at
+# the given tick of the peer.
+func _get_view_delay_for(peer: int, tick: int) -> int:
+	# The host sees other players where it simulates them, host_delay_ticks
+	# behind. This also covers offline play.
+	if peer == multiplayer.get_unique_id():
+		return _simulation_host_delay_ticks
+	
+	var view_delay := _view_delay_tracker.get_view_delay(peer, tick, -1)
+	if view_delay < 0:
+		# No sample for this tick, e.g. the peer just connected. It can't see
+		# the host's simulation any sooner than the host simulates it.
+		_logger.debug("No view delay from peer #%s @%d, using host delay", [peer, tick])
+		return _simulation_host_delay_ticks
+	
+	# The view delay is reported by the client, so don't trust it blindly.
+	# It can't be less than host_delay_ticks, and can't rewind further than
+	# max_view_delay_ticks.
+	var max_view_delay := maxi(_simulation_host_delay_ticks, _max_view_delay_ticks)
+	return clampi(view_delay, _simulation_host_delay_ticks, max_view_delay)
 
 func _after_tick(tick : int) -> void:
 	

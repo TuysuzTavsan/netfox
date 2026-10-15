@@ -214,6 +214,27 @@ var SETTINGS: Array[Dictionary] = [
 		"value": 8,
 		"type" : TYPE_INT
 	},
+	{
+		"name": "netfox/simulator/max_view_delay_ticks",
+		"value": 30,
+		"type" : TYPE_INT
+	},
+	{
+		# Seconds between periodic view delay samples sent by clients
+		"name": "netfox/simulator/view_delay_send_interval",
+		"value": 0.25,
+		"type": TYPE_FLOAT,
+		"hint": PROPERTY_HINT_RANGE,
+		"hint_string": "0,2,or_greater"
+	},
+	{
+		# View delay changes of at least this many seconds are sent immediately
+		"name": "netfox/simulator/view_delay_change_threshold",
+		"value": 0.06,
+		"type": TYPE_FLOAT,
+		"hint": PROPERTY_HINT_RANGE,
+		"hint_string": "0,1,or_greater"
+	},
 ]
 
 const AUTOLOADS: Array[Dictionary] = [

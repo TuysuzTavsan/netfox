@@ -550,8 +550,10 @@ func _ingest_simulator(sender: int, snapshot: _Snapshot) -> void:
 	snapshot.sanitize(sender)
 
 	_logger.trace("Ingesting simulator state: %s", [snapshot])
-	if NetworkHistoryServer._merge_simulator(snapshot):
-		_on_simulator.emit(snapshot)
+	NetworkHistoryServer._merge_simulator(snapshot)
+
+	# Emitted for every received state, same as rollback's _on_state
+	_on_simulator.emit(snapshot)
 
 func _ingest_state(sender: int, snapshot: _Snapshot) -> void:
 	snapshot.sanitize(sender)
