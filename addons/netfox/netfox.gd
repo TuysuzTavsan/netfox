@@ -186,13 +186,6 @@ var SETTINGS: Array[Dictionary] = [
 		"type" : TYPE_INT
 	},
 	{
-		# Ticks the host waits for an input before considering it missing.
-		# Must be smaller than netfox/input_sender/history_limit
-		"name": "netfox/input_sender/missing_input_history",
-		"value": 16,
-		"type" : TYPE_INT
-	},
-	{
 		# Send inputs to every peer, not only the host
 		"name": "netfox/input_sender/enable_input_broadcast",
 		"value": false,

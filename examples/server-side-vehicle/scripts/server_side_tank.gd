@@ -134,22 +134,14 @@ func die() -> void:
 	_turret_tilt = 0
 	_turret_traverse = 0
 
-func _on_input_sender_local_input(tick):
-	print("Input sender local input is emitted on peer:%s" %multiplayer.get_unique_id())
+# Called on the host after every tick, for every tank, with the inputs of the
+# tick applied. The tank is a physics vehicle synchronized with a
+# StateSynchronizer, so the host moves it and clients see the result.
+func _on_input_sender_input_applied(tick: int, is_predicted: bool) -> void:
 	_handle_movement(tank_input.movement)
 	_move_turret(tank_input.mouse_movement)
 	
-	if tank_input.fire:
-		_fire(tick)
-
-
-func _on_input_sender_missing_input(_current_tick, _latest_known_input_tick):
-	print("Input is missing on :%s" %name)
-
-
-func _on_input_sender_network_input(tick):
-	_handle_movement(tank_input.movement)
-	_move_turret(tank_input.mouse_movement)
-	
-	if tank_input.fire:
+	# Don't fire on a guessed input. _predict_input already clears fire, this
+	# is just to be explicit.
+	if tank_input.fire and not is_predicted:
 		_fire(tick)

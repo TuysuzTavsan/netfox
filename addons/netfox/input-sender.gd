@@ -5,9 +5,9 @@ class_name InputSender
 ## Stores inputs and sends them to host.
 ## [br][br]
 ##
-## [InputSender] is a multi purpose node to use on networked games,
-## It provides signals to code host and client side logic.
-## [InputSender] signals are tied and emitted on [signal NetworkTime.on_tick].
+## [InputSender] is a multi purpose node to use on networked games. It sends
+## inputs to the host, which either runs them through a [Simulator], or emits
+## [signal input_applied] to run your own host side logic with them.
 ## [br][br]
 ## [b]Predicting and merging inputs[/b]: inputs are gathered once per tick,
 ## the same way as for rollback. Sometimes netfox needs an input that was never
@@ -42,45 +42,29 @@ class_name InputSender
 ## For example, inputs that are only true for a single tick, like a jump press,
 ## are copied by default when predicting, and the press happens twice. When
 ## merging, the default drops the older press.
-## 
-## @experimental:
-## InputSenderServer assumes input snapshots arrive as whole. (atomic), if snapshot
-## arrives with multiple parts, [InputSender] signals wont be reliable to 
-## code game logic.
 
-## Emitted if host received input from remote owner of input_properties.
-## Emitted for inputs that arrive within missing-input-history range.
-## (see project settings netfox/input-sender/missing-input-history)
-## InputSenderServer handles applying received input internally before emitting this signal.
-## Use this signal to code host side logic.
-signal network_input(tick : int)
-
-## Emitted if local peer has authority over input_property nodes.
-## This signal is emitted for host players too.
-## InputSenderServer will apply latest local inputs for this tick internally before 
-## emitting this signal.
-## Use this signal to code client side logic which doesnt interfere with actual game state.
-## Examples: Playing a sound, showing a visual effect.
-## Dont use this signal to code same game logic on client side as it will not likely
-## be same with remote host machine, it will cause syncing issues if you are already
-## using some other method to syncronize game state (Syncronizers/Simulators).
-signal local_input(tick : int)
-
-## Emitted if input is missing.
-## Input is considered missing if host did not receive input for a tick more than
-## missing-input-history. (See project settings netfox/input-sender).
-## Host will try to find and apply previous known inputs before emitting this signal.
-## If host cant find any previous known input, latest_known_input_tick will be -1.
-## Also see late_input signal. An input will be considered missing at first,
-## but later it might arrive late. In that sceneario late_input signal will be emitted too.
-## Use this signal to code host side prediction logic.
-signal missing_input(for_tick : int, latest_known_input_tick : int)
-
-## Emitted when input arrived so late that it past the missing history size.
-## (see project settings netfox/input-sender/missing-input-history)
-## InputSenderServer will apply received input state internally before emitting this signal.
-## If a late input also past the history limit of input-sender, it will be dropped. 
-signal late_input(for_tick : int)
+## Emitted on the host, after every tick, when the inputs of [param tick] are
+## applied to the input properties. Use it to run host side logic with the
+## inputs, e.g. for physics vehicles synchronized with a [StateSynchronizer].
+## Whatever you change here is recorded as the state of [code]tick + 1[/code],
+## the same as with [Simulator] and rollback.
+## [br][br]
+## Emitted for every player, including the host's own. Clients stamp their
+## inputs ahead, so they're usually here in time. If they're not,
+## [param is_predicted] is true, and the inputs are predicted from the latest
+## ones before [param tick], see "Predicting and merging inputs" above. Inputs
+## arriving after their tick was applied are never applied, the host doesn't
+## change the past.
+## [br][br]
+## Not emitted on clients. Only emitted if something is connected to it.
+## [codeblock]
+## func _on_input_sender_input_applied(tick: int, is_predicted: bool) -> void:
+##     engine_force = input.movement.y * engine_power
+##     # Don't fire on a guessed input
+##     if input.fire and not is_predicted:
+##         fire(tick)
+## [/codeblock]
+signal input_applied(tick: int, is_predicted: bool)
 
 ## The root node for resolving node paths in inputs. Defaults to the parent node.
 @export var root: Node = get_parent()
@@ -323,19 +307,6 @@ func _reprocess_settings() -> void:
 	
 	_properties_dirty = false
 	process_settings()
-
-# Helper function to apply given snapshot for only this node.
-# TODO Applying whole snapshot and iterating over ticks would be nicer
-# if we decide to have singleton for this
-func _apply_snapshot_for_self(snapshot : _Snapshot) -> void:
-	_logger.trace("Applying snapshot for self :%s", [snapshot])
-	for subject in _input_properties.get_subjects():
-		for property in _input_properties.get_properties_of(subject):
-			
-			if snapshot.has_property(subject, property):
-				var value := snapshot.get_property(subject, property)
-				# TODO is this should be node.set_indexed ??
-				subject.set_indexed(property, value)
 
 # Returns the current input, see "Predicting and merging inputs" in the class
 # description.

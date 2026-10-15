@@ -150,7 +150,7 @@ func deregister_simulator(simulator : Simulator) -> void:
 ## [br][br]
 ## [param fired_tick] is the tick of the fire input, e.g. the tick passed to
 ## [code]_simulated_tick[/code] when the fire input is applied, or the tick
-## given by [signal InputSender.network_input].
+## given by [signal InputSender.input_applied].
 ## [br][br]
 ## The projectile is caught up from the tick of the host's simulation that the
 ## firing peer was seeing at [param fired_tick], see [_SimulatorTimeTracker]. The

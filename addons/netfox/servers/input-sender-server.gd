@@ -4,18 +4,32 @@ class_name _InputSenderServer
 # @public class
 
 ## Handles [InputSender] related operations.
-
-## InputSenderServer assumes input snapshots arrive as whole. (atomic), if snapshot
-## arrives with multiple parts, [InputSender] signals wont be reliable to 
-## code game logic.
+##
+## InputSenderServer does two jobs, after every tick:
+## [br]1. [b]Send our own inputs[/b], on every peer: the input properties of
+## InputSenders we have authority over are recorded under a stamp and sent to
+## the host. On the host, the stamp is the tick itself. On clients, it's
+## tick + input lead, see [method _record_and_send_inputs].
+## [br]2. [b]Apply inputs[/b], on the host only: for every InputSender, the
+## inputs of the current tick are applied, and
+## [signal InputSender.input_applied] is emitted. If the inputs of the tick
+## didn't arrive, they're predicted, see [InputSender].
+## [br][br]
+## Example, on the host at tick 100, with a client stamping 5 ticks ahead:
+## [codeblock]
+## after_tick 100 | host's own inputs recorded and stamped 100
+##                | inputs of 100 applied for every InputSender, the
+##                | client's were stamped 100 when it was at tick 95
+##                | input_applied(100, false) emitted
+## after that     | StateSynchronizers record the result as tick 101
+## [/codeblock]
+## Inputs that arrive after the host applied their tick are never applied, the
+## host already predicted them, and doesn't change the past.
 
 static var _logger := NetfoxLogger._for_netfox("InputSenderServer")
 
 var _history_server : NetworkHistoryServer = null
 var _synchronization_server : NetworkSynchronizationServer = null
-
-var _missing_inputs_history_size : int = ProjectSettings.get_setting("netfox/input_sender/missing_input_history", 16)
-var _input_sender_history_size : int = ProjectSettings.get_setting("netfox/input_sender/history_limit", 64)
 
 # A lead change skips at most this many stamps. A bigger jump means time
 # jumped forward, e.g. after a pause, and the skipped stamps aren't filled.
@@ -25,217 +39,69 @@ const MAX_FILLED_STAMPS := 4
 # Inputs are stamped with tick + input lead, see _SimulatorTimeTracker.
 var _last_recorded_tick : int = -1
 
-# Stamp of our latest gathered input that local_input wasn't emitted for yet,
-# -1 if none. Filled stamps are predicted, not gathered, so they're not here.
-var _pending_local_input_tick : int = -1
-
 # Inputs held back for a tick because the input lead shrank, see
 # _record_and_send_inputs. Maps InputSender -> input Dictionary.
 var _held_inputs : Dictionary[InputSender, Dictionary] = {}
 
-# Ticks that we received new input snapshots.
-var _ticks_that_has_new_snapshot : Array[int] = []
+# Every registered InputSender.
+var _input_senders : Array[InputSender] = []
 
-# Maps InputSender -> InputSenderHistory (inner class, look at the end of this script.)
-var _per_input_sender_history : Dictionary = {}
+func _init(p_history_server: _NetworkHistoryServer = null, p_synchronization_server: _NetworkSynchronizationServer = null):
+	_history_server = p_history_server
+	_synchronization_server = p_synchronization_server
 
 func _ready():
 	# Ensure dependencies
 	if not _history_server: _history_server = NetworkHistoryServer
 	if not _synchronization_server: _synchronization_server = NetworkSynchronizationServer
 	
-	# Missing inputs are looked up missing_input_history ticks back, so they
-	# have to be inside the history_limit ticks of the past that are kept.
-	if _missing_inputs_history_size >= _input_sender_history_size:
-		_logger.warning(
-			"netfox/input_sender/missing_input_history (%d) must be smaller than " +
-			"netfox/input_sender/history_limit (%d), using %d",
-			[_missing_inputs_history_size, _input_sender_history_size, _input_sender_history_size - 1])
-		_missing_inputs_history_size = maxi(0, _input_sender_history_size - 1)
-	
-	# Record inputs similiar to rollback so that users can use same methods
-	# on their input scripts.
-	# For good reasons, We do logic and run InputSender signals on NetworkTime.on_tick
-	# This means local players wont have input information for their first tick.
-	# Its not really like await processframe but this will only add slight delay that wont have
-	# Important effects on the game itself.
-	NetworkTime.after_tick.connect(_record_and_send_inputs)
+	# Inputs are recorded after every tick, the same way as for rollback, so
+	# users can gather inputs the same way: set the input properties before
+	# the tick, e.g. on NetworkTime.before_tick_loop or before_tick.
+	#
+	# Inputs are applied right after recording them, still on after_tick.
+	# This way the host's own inputs of this tick are already recorded, and
+	# whatever input_applied handlers change is recorded by StateSynchronizers
+	# as the state of tick + 1, which happens after after_tick.
+	NetworkTime.after_tick.connect(_after_tick)
 	
 	# Ticks start over when NetworkTime starts, so do the stamps.
 	NetworkTime.after_sync.connect(_reset_stamps)
-	
-	_synchronization_server._on_input_sender.connect(_on_received_input_snapshot)
-	
-	# About when we should process our inputs:
-	# It doesnt make sense to process them when we receive them, as it will break the
-	# work order of [Simulator]s or [TickInterpolator]s, or we might want this to work
-	# with physics. It would be unreliable.
-	# Therefore we need to process them in a fixed point.
-	# Processing them on every tick doesnt make sense, since host may run multiple
-	# ticks and we probably wont even have new inputs to process anyway.
-	# In conculusion it makes sense to process them after a tick loop run.
-	#
-	# But if we run logic on after_tick_loop, our effect on the game state is lost.
-	# Because most setups tends to use state-syncronizer with input-sender.
-	# state-syncronzier records on every tick and restores after tick loop.
-	# 
-	# To make sure our effect isnt lost to this order, we run logic on tick.
-	NetworkTime.on_tick.connect(_on_tick)
 
-# Whenever we receive input snapshot, we investigate and fetch _earliest_input tick
-# This is later used to iterate over saved snapshots and emit signals.
-func _on_received_input_snapshot(snapshot : _Snapshot) -> void:
-	if snapshot.is_empty():
-		return
+func _after_tick(_delta: float, tick: int) -> void:
+	_record_and_send_inputs(tick)
 	
-	if not _ticks_that_has_new_snapshot.has(snapshot.tick):
-		_ticks_that_has_new_snapshot.push_back(snapshot.tick)
+	if multiplayer.is_server():
+		_apply_inputs(tick)
 
-# After a tick has been run
-# Handle new snapshots
-# Handle missing inputs.
-# Handle local inputs.
+# Host side. Applies the inputs of the given tick for every InputSender, and
+# emits input_applied. Inputs are read from each player's own history, so
+# nothing another player sends can affect it. Missing inputs are predicted
+# from the latest ones before the tick, see InputSender.
 #
-# Since we are modifying InputSenders before emitting their signals,
-# Their input properties will be messed up, this means users inputs wont be
-# recorded properly on NetworkTime.after_tick.
-# To prevent that, this function records their current state and restores at the
-# end of this function.
-func _on_tick(_delta : float, tick : int) -> void:
-	# First save input-sender states.
-	_save_input_sender_states()
-	
-	_handle_new_snapshots(tick)
-	
-	# We need to emit missing_input signal for old ticks.
-	var missing_tick := tick - _missing_inputs_history_size
-	if missing_tick >= 0:
-		_handle_missing_tick(missing_tick)
-	
-	# DANGER
-	# We use the latest recorded inputs, recorded on the previous after_tick.
-	# This is explained on _ready comments.
-	# Only once per gathered input: when an input is held back, nothing new
-	# was recorded, see _record_and_send_inputs.
-	if _pending_local_input_tick >= 0:
-		_handle_local_inputs(_pending_local_input_tick)
-		_pending_local_input_tick = -1
-	
-	# Logic is done, restore input-sender states.
-	_restore_input_sender_states()
-	
-	# Now remove older history data that we keep.
-	_trim_input_sender_histories(tick)
-
-# Handles new input-sender snapshots.
-# This function iterates over _ticks_that_has_new_snapshot. 
-# If tick is within range of missing-input-history,
-# applies/emits network_input.
-# If its not within range,
-# it applies/emits late_input.
-# Clears _ticks_that_has_new_snapshot after done.
-func _handle_new_snapshots(current_tick : int) -> void:
-	if _ticks_that_has_new_snapshot.is_empty():
-		return
-	
-	# So ticks are processed in ascending order.
-	_ticks_that_has_new_snapshot.sort()
-	
-	
-	for i in _ticks_that_has_new_snapshot:
-		
-		# This line saves processing because we fetch snapshot once per tick.
-		var snapshot := _history_server._get_input_sender_snapshot(i)
-		if not snapshot:
-			# This situation shouldnt happen anyway.
+# InputSenders with nothing connected to input_applied are skipped, there's
+# nothing to apply the inputs for. This is checked every tick, so connecting
+# at any time works from the next tick on.
+func _apply_inputs(tick: int) -> void:
+	for input_sender in _input_senders:
+		if not input_sender.input_applied.has_connections():
 			continue
 		
-		# Iterate over input senders and check if there is new input in tick
-		for input_sender in _per_input_sender_history.keys():
-			if not _is_there_new_input_for_input_sender(input_sender, i, snapshot):
-				# No new input, we already processed this one.
-				continue
-			
-			# Did not received before
-			# If tick i past the missing_history_size, consider it late.
-			input_sender._apply_snapshot_for_self(snapshot)
-			if i <= current_tick - _missing_inputs_history_size:
-				# Its a late input.
-				input_sender.late_input.emit(i)
-			else:
-				# Its within range, consider it as network input.
-				input_sender.network_input.emit(i)
-			
-			# Set as handled anyway for both situation.
-			_set_input_received_for_input_sender(input_sender, i)
-	
-	_ticks_that_has_new_snapshot.clear()
-
-# Iterates over snapshot for given tick
-# Checks _per_input_sender_history for given tick.
-# If input_sender did not received anything for this tick
-# It assumes input is missing and emits input_missing.
-# Call this function after calling _handle_new_snapshots.
-# Param for tick must be the value of current_tick - missing_input_history_size.
-func _handle_missing_tick(for_tick : int) -> void:
-	
-	for input_sender in _per_input_sender_history.keys():
-		var input_sender_history := _per_input_sender_history[input_sender] as InputSenderHistory
+		var input_subjects := input_sender._input_properties.get_subjects()
+		var latest_input_tick := _history_server.get_latest_input_sender_for(input_subjects, tick)
+		var is_predicted := latest_input_tick != tick
 		
-		if not input_sender_history.did_receive_for_tick(for_tick):
-			# We didnt receive anything for this input sender for this tick.
-			# Try to find latest input and emit missing_input.
-			
-			var latest_tick := _history_server.get_latest_input_sender_for(
-				input_sender._input_properties.get_subjects(), for_tick)
-			
-			if latest_tick >= 0:
-				var snapshot := _history_server._get_input_sender_snapshot(latest_tick)
-				if snapshot:
-					input_sender._apply_snapshot_for_self(snapshot)
-				else:
-					# If no snapshot, we need to emit signal with -1
-					latest_tick = -1
-			
-			# We may be able to find snapshot or not, emit anyway
-			input_sender.missing_input.emit(for_tick, latest_tick)
-
-# Iterates over input-senders and emits local input with latest recorded input available.
-# Only does so if input-sender is authoritative peer.
-
-# Duplicated comment from _ready:
-#
-# "For good reasons, We do logic and run InputSender signals on NetworkTime.on_tick
-# This means local players wont have input information for their first tick.
-# Its not really like await processframe but this will only add slight delay that wont have
-# important effects on the game itself."
-func _handle_local_inputs(for_tick : int) -> void:
-	
-	# Fetch snapshot once before loop to prevent unneccessary fetches.
-	var snapshot := _history_server._get_input_sender_snapshot(for_tick)
-	if not snapshot:
-		# This shouldnt happen anyway.
-		return
-	
-	for input_sender in _per_input_sender_history.keys():
-		if input_sender.has_authority_over_input_nodes():
-			# Its authoritative player.
-			
-			# We know that snapshots are recorded for each tick on NetworkTime.after_tick.
-			# We can use it, no need to query get_latest_for here.
-			input_sender._apply_snapshot_for_self(snapshot)
-			input_sender.local_input.emit(for_tick)
-
-# Saves all input-sender input properties.
-# This is done before messing with properties.
-func _save_input_sender_states() -> void:
-	for input_sender in _per_input_sender_history.keys():
+		# Save the input properties, so the inputs gathered on this peer are
+		# untouched by what we apply here.
 		input_sender._save_properties()
-
-# Restores all input-sender input properties.
-# This is done after messing with properties.
-func _restore_input_sender_states() -> void:
-	for input_sender in _per_input_sender_history.keys():
+		
+		# Apply the inputs of this tick, or the latest ones before it.
+		_history_server._restore_input_sender_subjects(input_subjects, tick)
+		if is_predicted:
+			input_sender._set_input(input_sender._get_predicted_input(input_sender._get_input()))
+		
+		input_sender.input_applied.emit(tick, is_predicted)
+		
 		input_sender._restore_properties()
 
 # Records our own inputs and sends them to the host. Called after every tick.
@@ -277,7 +143,7 @@ func _restore_input_sender_states() -> void:
 #
 # The lead changes by at most 1 tick per second, so this is rare. Predicting
 # and merging is done by InputSender, so users can customize it.
-func _record_and_send_inputs(_delta: float, tick: int) -> void:
+func _record_and_send_inputs(tick: int) -> void:
 	var stamped_tick := tick + SimulatorServer._get_input_lead()
 	
 	if _last_recorded_tick < 0:
@@ -328,8 +194,6 @@ func _record_inputs(stamped_tick: int) -> void:
 		_held_inputs.clear()
 		
 		_record_and_send_with(stamped_tick, merged_inputs)
-	
-	_pending_local_input_tick = stamped_tick
 
 # Records and sends predicted inputs under the stamps from from_tick to
 # to_tick (exclusive). All of them are predicted from the inputs recorded under
@@ -381,85 +245,19 @@ func _record_and_send(stamped_tick: int) -> void:
 # InputSenders whose inputs we gather and send.
 func _get_local_input_senders() -> Array[InputSender]:
 	var result : Array[InputSender] = []
-	for input_sender in _per_input_sender_history.keys():
+	for input_sender in _input_senders:
 		if input_sender.has_authority_over_input_nodes():
 			result.push_back(input_sender)
 	return result
 
 func _reset_stamps() -> void:
 	_last_recorded_tick = -1
-	_pending_local_input_tick = -1
 	_held_inputs.clear()
 
 func _register_input_sender(input_sender : InputSender) -> void:
-	_per_input_sender_history[input_sender] = InputSenderHistory.new()
+	if not _input_senders.has(input_sender):
+		_input_senders.push_back(input_sender)
 
 func _deregister_input_sender(input_sender : InputSender) -> void:
-	_per_input_sender_history.erase(input_sender)
+	_input_senders.erase(input_sender)
 	_held_inputs.erase(input_sender)
-
-# Helper that sets input received for param input sender on given tick.
-func _set_input_received_for_input_sender(input_sender : InputSender, tick : int) -> void:
-	var history : InputSenderHistory = _per_input_sender_history[input_sender] as InputSenderHistory
-	if history:
-		history.set_as_received_for_tick(tick)
-
-## Check if there is a new input available for given input sender on given tick within matching snapshot.
-func _is_there_new_input_for_input_sender(input_sender : InputSender, tick : int, snapshot : _Snapshot) -> bool:
-	var history : InputSenderHistory = _per_input_sender_history[input_sender] as InputSenderHistory
-	var received_before := history.did_receive_for_tick(tick)
-	
-	if received_before:
-		return false
-	
-	# We need to check if snapshot has this input senders properties
-	if snapshot:
-		for property_entry in input_sender._property_entries:
-			if snapshot.has_property(property_entry.node, property_entry.property):
-				# There is new information available indeed
-				return true
-	
-	# No new information
-	return false
-
-# Erases old input sender history data that we dont need anymore.
-func _trim_input_sender_histories(current_tick : int) -> void:
-	# Since we cant merge older history than input-sender-history
-	# we can erase data older than that.
-	
-	var erase_ticks_older_than_inclusive : int = current_tick - _input_sender_history_size
-	
-	if erase_ticks_older_than_inclusive > 0:
-		for input_sender_history in _per_input_sender_history.values():
-			input_sender_history.erase_old_ticks(erase_ticks_older_than_inclusive)
-
-func _init(p_history_server: _NetworkHistoryServer = null, p_synchronization_server: _NetworkSynchronizationServer = null):
-	_history_server = p_history_server
-	_synchronization_server = p_synchronization_server
-
-## Inner class to remember and compare
-## Did we receive any input before for given tick?
-## stored for specific InputSender.
-class InputSenderHistory extends RefCounted:
-	
-	# Maps ticks to bool (we received input before = true, never received = false)
-	var _history : Dictionary = {}
-	
-	## Set param tick as received
-	func set_as_received_for_tick(tick : int) -> void:
-		_history[tick] = true
-	
-	## Check if we received input for given tick.
-	## Returns false if we dont have information for that tick.
-	func did_receive_for_tick(tick : int) -> bool:
-		return _history.get(tick, false)
-	
-	## Erase old ticks that we dont need anymore.
-	func erase_old_ticks(older_than_inclusive : int) -> void:
-		var to_erase : Array[int] = []
-		for tick in _history.keys():
-			if tick <= older_than_inclusive:
-				to_erase.push_back(tick)
-		
-		for erase_tick in to_erase:
-			_history.erase(erase_tick)
