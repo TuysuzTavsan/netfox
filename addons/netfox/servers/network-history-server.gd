@@ -430,7 +430,7 @@ func _restore_latest(tick: int, history: _PerObjectHistory, filter: Callable = C
 		# Optional filter. example: to only restore subjects we dont have authority over.
 		if filter.is_valid() and not filter.call(subject):
 			continue
-  
+
 		# Grab latest snapshot up to tick
 		var snapshot := history.get_latest_snapshot(tick, subject)
 

@@ -308,7 +308,6 @@ func _handle_local_authoritative_simulators(current_tick: int) -> void:
 
 	for simulator in _local_authoritative_simulators:
 
-		var input_subjects := simulator.listened_input_sender._input_properties.get_subjects()
 		var state_subjects := simulator._state_properties.get_subjects()
 
 		# The host sends the state after its tick T as T + 1, so the truth can be
@@ -329,7 +328,7 @@ func _handle_local_authoritative_simulators(current_tick: int) -> void:
 			)
 
 			# Apply our newest inputs.
-			_history_server._restore_input_sender_subjects(input_subjects, predicted_tick)
+			_apply_input_at(simulator.listened_input_sender, predicted_tick)
 
 			var is_fresh := _is_tick_fresh_for(simulator, predicted_tick)
 			simulator._run_simulation(NetworkTime.ticktime, predicted_tick, is_fresh)
@@ -345,8 +344,10 @@ func _handle_local_authoritative_simulators(current_tick: int) -> void:
 
 		for i in range(latest_truth_tick, predicted_tick + 1):
 			# Apply inputs of this tick. If there's no input recorded for it,
-			# the latest input before it is applied.
-			_history_server._restore_input_sender_subjects(input_subjects, i)
+			# the latest input before it is applied. Right after spawning, the
+			# truth can be older than our first input, then the default input
+			# is applied, see _apply_input_at().
+			_apply_input_at(simulator.listened_input_sender, i)
 
 			var is_fresh := _is_tick_fresh_for(simulator, i)
 			simulator._run_simulation(NetworkTime.ticktime, i, is_fresh)
@@ -368,18 +369,12 @@ func _handle_host_puppet_simulators(current_tick: int) -> void:
 	for simulator in _host_puppet_simulators:
 
 		var input_sender := simulator.listened_input_sender
-		var input_subjects := input_sender._input_properties.get_subjects()
 
 		# Inputs are read from each player's own history, not from the per tick
 		# snapshot shared by all players. This way, whatever another player
 		# sends can't keep this player from being simulated.
-		var latest_input_tick := _history_server.get_latest_input_sender_for(
-				input_subjects,
-				simulated_tick
-			)
-
 		# Apply the inputs of this tick, or the latest ones before it.
-		_history_server._restore_input_sender_subjects(input_subjects, simulated_tick)
+		var latest_input_tick := _apply_input_at(input_sender, simulated_tick)
 
 		if latest_input_tick != simulated_tick:
 			# The input didn't arrive in time, predict it from the latest one we
@@ -523,6 +518,31 @@ func _catch_up_fresh_projectiles(current_tick: int) -> void:
 #
 #   at tick 100 | simulates 97 .. 105 | fresh: 105 only, 97 .. 104 were done
 #   at tick 101 | simulates 98 .. 106 | fresh: 106 only
+# Applies the inputs of input_sender recorded at or before tick, and returns
+# the tick they were recorded at.
+#
+# If there are none at all, the default input is applied and -1 is returned.
+# This happens right after a player spawned: the client re-simulates from the
+# truth, which can be older than its first input, and the host simulates the
+# player before its first input arrives. Without this, whatever the input
+# properties hold at the moment would be applied for every such tick, e.g.
+# this frame's mouse movement, once per tick:
+#
+#   client spawned @60, lead 8, first input stamped @68
+#   truth @62 arrives, simulate 62 .. 69
+#   62 .. 67 | no input  -> default input (was: this frame's live input)
+#   68 .. 69 | recorded inputs
+func _apply_input_at(input_sender: InputSender, tick: int) -> int:
+	var input_subjects := input_sender._input_properties.get_subjects()
+	var latest_input_tick := _history_server.get_latest_input_sender_for(input_subjects, tick)
+
+	if latest_input_tick < 0:
+		input_sender._set_input(input_sender._default_input)
+	else:
+		_history_server._restore_input_sender_subjects(input_subjects, tick)
+
+	return latest_input_tick
+
 func _is_tick_fresh_for(node: Node, tick: int) -> bool:
 	return tick > _latest_simulated_ticks.get(node, -1)
 

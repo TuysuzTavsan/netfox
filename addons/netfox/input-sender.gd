@@ -98,6 +98,11 @@ var _saved_inputs_snapshot : _PropertySnapshot
 var _property_cache: PropertyCache
 var _property_entries: Array[PropertyEntry] = []
 
+# The input before anything was gathered or applied, keyed like _get_input().
+# Applied for ticks that have no input at all, e.g. right after a player
+# spawned, on every peer the same way. See _SimulatorServer._apply_input_at().
+var _default_input: Dictionary = {}
+
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
@@ -151,6 +156,13 @@ func process_settings() -> void:
 	for property in input_properties:
 		var property_entry = _property_cache.get_entry(property)
 		_property_entries.push_back(property_entry)
+
+	# Remember the default input. Only properties seen for the first time, so
+	# reprocessing settings later never takes gathered values as defaults.
+	for property_entry in _property_entries:
+		var path := property_entry.to_string()
+		if not _default_input.has(path):
+			_default_input[path] = property_entry.get_value()
 
 	# Register identifiers
 	for node in _input_properties.get_subjects():

@@ -95,8 +95,13 @@ func _apply_inputs(tick: int) -> void:
 		# untouched by what we apply here.
 		input_sender._save_properties()
 
-		# Apply the inputs of this tick, or the latest ones before it.
-		_history_server._restore_input_sender_subjects(input_subjects, tick)
+		# Apply the inputs of this tick, or the latest ones before it. If the
+		# player has no inputs at all yet, e.g. it just spawned, apply its
+		# default input, the same as SimulatorServer does.
+		if latest_input_tick < 0:
+			input_sender._set_input(input_sender._default_input)
+		else:
+			_history_server._restore_input_sender_subjects(input_subjects, tick)
 		if is_predicted:
 			input_sender._set_input(input_sender._get_predicted_input(input_sender._get_input()))
 
