@@ -174,15 +174,30 @@ func get_latest_input_sender_for(subjects: Array, tick: int) -> int:
 func get_latest_simulator_for(subjects: Array, tick: int) -> int:
 	return _get_latest_for(subjects, tick, _simulator_history)
 
-## Get the latest tick at or before [param tick] where the simulator snapshot
-## has data for all of the [param subjects]. Returns -1 if there's none.
+## Get the latest tick at or before [param tick] where every one of the
+## [param subjects] has auth (received) simulator state. Returns -1 if there's
+## none.
+## [br][br]
+## Auth is checked on the per-object history, not on the per-tick snapshot. A
+## diff state only carries the subjects whose properties changed, so a subject
+## that didn't change is missing from that tick's snapshot even though the host
+## sent it. Its auth state is carried forward in the per-object history instead,
+## see [method _merge_simulator].
 func get_latest_simulator_for_snapshot(subjects: Array, tick: int) -> int:
 	# Walk backwards from the newest tick, so the first match is the latest one
 	var latest_index := mini(tick, _simulator_snapshots.get_latest_index())
 
 	for index in range(latest_index, _simulator_snapshots.get_earliest_index() - 1, -1):
-		var snapshot := _simulator_snapshots.get_at(index) as _Snapshot
-		if snapshot and snapshot.has_subjects(subjects):
+		if not _simulator_snapshots.has_at(index):
+			continue
+
+		var has_all_auth := true
+		for subject in subjects:
+			if not _simulator_history.is_auth(index, subject):
+				has_all_auth = false
+				break
+
+		if has_all_auth:
 			return index
 
 	return -1
@@ -366,7 +381,10 @@ func _merge_input_sender(snapshot: _Snapshot) -> bool:
 # entry at this tick is reset to its latest auth state. This way carry-forward
 # never copies predicted values into auth data.
 func _merge_simulator(snapshot: _Snapshot) -> bool:
-	for subject in snapshot.get_subjects():
+	# Auth subjects include the ones a diff sent without any changed property.
+	# Resetting them carries their latest auth state forward to this tick, so
+	# the tick counts as truth for them too, see get_latest_simulator_for_snapshot.
+	for subject in snapshot.get_auth_subjects():
 		_simulator_history.reset_to_auth(snapshot.tick, subject)
 
 	_merge_snapshot(snapshot, _simulator_snapshots)
