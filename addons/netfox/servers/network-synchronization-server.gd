@@ -561,7 +561,8 @@ func _ingest_simulator(sender: int, snapshot: _Snapshot) -> void:
 	_logger.trace("Ingesting simulator state: %s", [snapshot])
 	NetworkHistoryServer._merge_simulator(snapshot)
 
-	# Emitted for every received state, same as rollback's _on_state
+	# Emitted for every received state, even if it changed nothing. The view
+	# delay is measured every time a state arrives, see _SimulatorTimeTracker.
 	_on_simulator.emit(snapshot)
 
 func _ingest_state(sender: int, snapshot: _Snapshot) -> void:
