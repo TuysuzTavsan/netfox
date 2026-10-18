@@ -256,6 +256,20 @@ func get_view_delay(peer: int, tick: int, default: int) -> int:
 
 	return view_delay as int
 
+## Client side: returns the view delay this client reports to the host, lead
+## included, or -1 if no simulator state arrived yet. Same value as the next
+## sample sent, see [method _send_view_delay].
+func get_reported_view_delay() -> int:
+	if _latest_received_tick < 0:
+		return -1
+	return maxi(0, _local_view_delay + _input_lead)
+
+## Host side: returns the newest view delay [param peer] reported, or -1 if it
+## hasn't reported yet. Not clamped to [code]max_view_delay_ticks[/code].
+func get_latest_view_delay(peer: int) -> int:
+	var newest_accepted_tick := NetworkTime.tick + get_max_input_lead_ticks() + INPUT_TICK_TOLERANCE
+	return get_view_delay(peer, newest_accepted_tick, -1)
+
 # Client side, called for every simulator state received from the host.
 func _on_simulator_state(snapshot: _Snapshot) -> void:
 	# Ignore states arriving out of order, the client already sees a newer one

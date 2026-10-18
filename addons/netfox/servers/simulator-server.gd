@@ -231,6 +231,38 @@ func _get_view_delay_for(peer: int, tick: int) -> int:
 	# It can't rewind further than max_view_delay_ticks.
 	return clampi(view_delay, 0, maxi(0, _max_view_delay_ticks))
 
+## Returns how many ticks ahead this peer stamps its inputs, see
+## [_SimulatorTimeTracker]. Always 0 on the host.
+func get_input_lead_ticks() -> int:
+	return _time_tracker.get_input_lead()
+
+## Returns the maximum input lead in ticks, see
+## [code]netfox/simulator/max_input_lead[/code].
+func get_max_input_lead_ticks() -> int:
+	return _time_tracker.get_max_input_lead_ticks()
+
+## Returns the maximum view delay in ticks, see
+## [code]netfox/simulator/max_view_delay_ticks[/code]. The host never rewinds
+## further than this when registering projectiles, see
+## [method register_projectile].
+func get_max_view_delay_ticks() -> int:
+	return maxi(0, _max_view_delay_ticks)
+
+## Client side: returns the view delay this peer reports to the host, in ticks,
+## or -1 if no simulator state has arrived yet.
+## [br][br]
+## The input lead is included, so this is how far the host rewinds when this
+## peer fires, see [_SimulatorTimeTracker].
+func get_view_delay_ticks() -> int:
+	return _time_tracker.get_reported_view_delay()
+
+## Host side: returns the newest view delay reported by [param peer], in ticks,
+## or -1 if it hasn't reported yet.
+## [br][br]
+## Not clamped to [method get_max_view_delay_ticks].
+func get_view_delay_ticks_for(peer: int) -> int:
+	return _time_tracker.get_latest_view_delay(peer)
+
 # Returns how many ticks ahead we stamp our inputs. Always 0 on the host.
 # Used by InputSenderServer and NetworkTime internally.
 func _get_input_lead() -> int:
